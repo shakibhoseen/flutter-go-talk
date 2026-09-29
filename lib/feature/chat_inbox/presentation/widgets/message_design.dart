@@ -1,9 +1,26 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:whatsapp_flutter_go/core/helper/my_ui_import.dart';
 
+import 'package:whatsapp_flutter_go/core/config/app_flavor_config.dart';
+import 'package:whatsapp_flutter_go/core/db/network/network_service_type.dart';
+
 import '../../../../gen/assets.gen.dart';
 import '../../../home/model/chat_message.dart';
+
+String _getFullUrl(String path) {
+  if (path.isEmpty) return "";
+  if (path.startsWith("http")) return path;
+  final baseUrl = AppFlavorConfig.baseUrlFor(NetworkServiceType.chat);
+  
+  if (baseUrl.endsWith('/') && path.startsWith('/')) {
+    return baseUrl + path.substring(1);
+  } else if (!baseUrl.endsWith('/') && !path.startsWith('/')) {
+    return '$baseUrl/$path';
+  }
+  return baseUrl + path;
+}
 
 Widget bottomDesign({
   required String value,
@@ -96,6 +113,7 @@ Widget designMessage(
   bool isCompare,
   int before,
   bool todayIndicator,
+  bool showSenderName,
 ) {
   return Column(
     children: [
@@ -120,6 +138,14 @@ Widget designMessage(
           ),
         ),
       if (todayIndicator) UIHelper.verticalSpace(20),
+      if (showSenderName)
+        Padding(
+          padding: const EdgeInsets.only(left: 12, bottom: 2),
+          child: Text(
+            model.senderName,
+            style: TextStyle(fontSize: 11, color: Colors.grey),
+          ),
+        ),
       Align(
         alignment: model.isMine ? Alignment.centerRight : Alignment.centerLeft,
         child: Padding(
@@ -137,6 +163,23 @@ Widget designMessage(
                       Icons.error,
                       color: Colors.red,
                     )),*/
+              if (!model.isMine)
+                Padding(
+                  padding: const EdgeInsets.only(right: 8.0),
+                  child: ClipOval(
+                    child: CachedNetworkImage(
+                      imageUrl: _getFullUrl(model.senderAvatar),
+                      width: 28,
+                      height: 28,
+                      fit: BoxFit.cover,
+                      errorWidget: (context, url, error) => CircleAvatar(
+                        radius: 14,
+                        backgroundColor: Colors.grey.shade300,
+                        child: const Icon(Icons.person, size: 16, color: Colors.white),
+                      ),
+                    ),
+                  ),
+                ),
               Container(
                 constraints: const BoxConstraints(maxWidth: 240),
                 padding: const EdgeInsets.symmetric(
@@ -171,13 +214,7 @@ Widget designMessage(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
-                    // model.imageUrl != null && model.imageUrl != ''
-                    //     ? model.isSend ??
-                    //             false || model.imageUrl!.contains('http')
-                    //         ? CachedNetworkImage(imageUrl: model.imageUrl ?? '')
-                    //         : Image.file(File(model.imageUrl ?? natureImage))
-                    //     :
-                    Container(width: 10),
+
                     Flex(
                       mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.end,
@@ -225,6 +262,31 @@ Widget designMessage(
           ),
         ),
       ),
+      if (model.readBy.isNotEmpty)
+        Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            // लুপ চালিয়ে ছোট ছোট Avatar দেখাব
+            ...model.readBy.map((user) => Padding(
+                  padding: const EdgeInsets.only(left: 2.0),
+                  child: ClipOval(
+                    child: CachedNetworkImage(
+                      imageUrl: _getFullUrl(user.avatarUrl),
+                      width: 14,
+                      height: 14,
+                      fit: BoxFit.cover,
+                      errorWidget: (context, url, error) => CircleAvatar(
+                        radius: 7,
+                        backgroundColor: Colors.grey.shade300,
+                        child: const Icon(Icons.person, size: 10, color: Colors.white),
+                      ),
+                    ),
+                  ),
+                )),
+            if (model.readCount > 3)
+              Text('+${model.readCount - 3}', style: TextStyle(fontSize: 10)),
+          ],
+        )
     ],
   );
 }

@@ -82,6 +82,11 @@ class ChatMessage extends BaseModel {
       messageType: json['message_type'] as String? ?? 'text',
       isMine: currentUserId != null && senderId == currentUserId,
       timeStamp: TimeStamp.fromDatePublish(sentAtMillis),
+      senderName: json['sender_name'] as String? ?? '',
+      senderAvatar: json['sender_avatar'] as String? ?? '',
+      readBy: readByList,
+      readCount: readCount,
+      isSeen: readCount > 0,
     );
   }
 
@@ -98,6 +103,10 @@ class ChatMessage extends BaseModel {
       isMine: isMine,
       isSeen: isSeen ?? this.isSeen,
       timeStamp: timeStamp,
+      senderName: senderName,
+      senderAvatar: senderAvatar,
+      readBy: readBy,
+      readCount: readCount,
     );
   }
 

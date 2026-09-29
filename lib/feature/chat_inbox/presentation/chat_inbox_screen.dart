@@ -150,6 +150,7 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
                     controller: cursorScrollController?.controller,
                     itemCount: data.length,
                     itemBuilder: (context, index) {
+
                       if (index+1 == data.length) {
                         return designMessage(
                           data.elementAt(index),
@@ -157,11 +158,16 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
                           false,
                           0,
                           true,
+                          false,
                         );
                       }
                       final oldModel = data.elementAt(index + 1);
                       final newModel = data.elementAt(index);
                       bool todayIndicator = false;
+                      bool showSenderName = false;
+                      if (!newModel.isMine && oldModel.senderId != newModel.senderId) {
+                        showSenderName = true; // নাম দেখাব
+                      }
                       if (oldModel.timeStamp?.dateCompare == null ||
                           newModel.timeStamp?.dateCompare == null) {
                         todayIndicator = false;
@@ -175,6 +181,7 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
                         true,
                         oldModel.sentAt.millisecondsSinceEpoch,
                         todayIndicator,
+                        showSenderName,
                       );
                     },
                   ),
