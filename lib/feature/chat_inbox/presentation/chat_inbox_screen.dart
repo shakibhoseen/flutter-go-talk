@@ -1,0 +1,216 @@
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:whatsapp_flutter_go/core/navigation/navigation_service.dart';
+import 'package:whatsapp_flutter_go/core/state/common_base_bloc.dart';
+import 'package:whatsapp_flutter_go/core/state/cursor/cursor_pagination_response.dart';
+import 'package:whatsapp_flutter_go/feature/chat_inbox/data/inbox_message_list_cursor_bloc.dart';
+import 'package:whatsapp_flutter_go/feature/chat_inbox/presentation/widgets/message_design.dart';
+import 'package:whatsapp_flutter_go/feature/home/model/chat_message.dart';
+
+import '../../../core/controllers/my_scroll_controller.dart';
+import '../../../core/db/network/socket/chat_socket_service.dart';
+import '../../../core/session/auth_session.dart';
+import '../../../gen/assets.gen.dart';
+import '../../home/data/socket_event.dart';
+import '../../home/model/conversation.dart';
+
+class ChatInboxScreen extends StatefulWidget {
+  const ChatInboxScreen({super.key});
+
+  @override
+  State<ChatInboxScreen> createState() => _ChatInboxScreenState();
+}
+
+class _ChatInboxScreenState extends State<ChatInboxScreen> {
+  InboxMessageListCursorBloc? inboxBloc;
+  final _controller = TextEditingController();
+  Conversation? conversationArgs;
+  StreamSubscription<dynamic>? _socketSubscription;
+
+  String? get _myId => AuthSession.tokens?.user?.id?.toString();
+  MyCursorScrollController? cursorScrollController;
+
+  void _resendMessage() {}
+
+  @override
+  void initState() {
+    conversationArgs = NavigationService.getArguments<Conversation>();
+    if (conversationArgs?.id != null) {
+      inboxBloc = InboxMessageListCursorBloc(
+        conversationId: conversationArgs!.id,
+      );
+      inboxBloc?.execute();
+      cursorScrollController = MyCursorScrollController(
+        inboxBloc!,
+        () {
+          inboxBloc?.execute();
+        },
+        cursorDataHolder: inboxBloc!.cursorPageHolder,
+        isReverse: true,
+      );
+    }
+    _socketSubscription = ChatSocketService.instance.messages.listen(
+      _handleSocketEvent,
+    );
+
+    super.initState();
+  }
+
+  void _send() {
+    final text = _controller.text.trim();
+    if (text.isEmpty) return;
+    ChatSocketService.instance.sendMessage(
+      conversationId: conversationArgs!.id,
+      content: text,
+    );
+    _controller.clear();
+  }
+
+  void _handleSocketEvent(dynamic raw) {
+    final event = decodeSocketEvent(raw);
+    if (event == null || event['type'] != 'new_message') return;
+
+    final payload = event['payload'];
+    if (payload is! Map) return;
+    final json = Map<String, dynamic>.from(payload);
+    if (json['conversation_id']?.toString() != conversationArgs?.id) return;
+
+    inboxBloc?.upsertLocalItem(
+      ChatMessage.fromJson(json, currentUserId: _myId),
+    );
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (inboxBloc == null) return const SizedBox();
+    return Scaffold(
+      appBar: AppBar(title: Text('inbox')),
+      body: Container(
+        height: double.infinity,
+        width: double.infinity,
+        decoration: BoxDecoration(
+          color: Colors.green.shade200,
+          image: DecorationImage(
+            image: AssetImage(Assets.lightBg.path),
+            fit: BoxFit.cover,
+          ),
+        ),
+        child: Column(
+          children: [
+            inboxBloc!.build(
+              //buildWhen: (previous, current) => current is SuccessWithPaginationState ,
+              builder: (context, state) {
+                if (state
+                    is SuccessWithPaginationState<
+                      CursorPaginationResponse<ChatMessage>
+                    >) {
+                  final data = state.data;
+                }
+                final data = inboxBloc?.cursorPageHolder.items ?? [];
+                return Expanded(
+                  child: ListView.builder(
+                    reverse: true,
+                    padding: const EdgeInsets.only(bottom: 8),
+                    controller: cursorScrollController?.controller,
+                    itemCount: data.length ?? 0,
+                    itemBuilder: (context, index) {
+                      if (index == 0) {
+                        return designMessage(
+                          data.elementAt(index),
+                          _resendMessage,
+                          false,
+                          0,
+                          true,
+                        );
+                      }
+                      final oldModel = data.elementAt(index - 1);
+                      final newModel = data.elementAt(index);
+                      bool todayIndicator = false;
+                      if (oldModel.timeStamp?.dateCompare == null ||
+                          newModel.timeStamp?.dateCompare == null) {
+                        todayIndicator = false;
+                      } else if (oldModel.timeStamp?.dateCompare !=
+                          newModel.timeStamp?.dateCompare) {
+                        todayIndicator = true;
+                      }
+                      return designMessage(
+                        newModel,
+                        _resendMessage,
+                        true,
+                        oldModel.sentAt.millisecondsSinceEpoch,
+                        todayIndicator,
+                      );
+                    },
+                  ),
+                );
+              },
+            ),
+
+            SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.all(8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _controller,
+                        decoration: const InputDecoration(
+                          hintText: 'Message',
+                          filled: true,
+                          fillColor: Colors.white,
+                        ),
+                        onSubmitted: (_) => _send(),
+                      ),
+                    ),
+                    IconButton(icon: const Icon(Icons.send), onPressed: _send),
+                  ],
+                ),
+              ),
+            ),
+
+            /* StreamBuilder<String>(
+              stream: _imageController.getImageState(),
+              builder: (context, snapshot) {
+                return Stack(
+                  alignment: Alignment.bottomLeft,
+                  clipBehavior: Clip.none,
+                  children: [
+                    bottomDesign(
+                      value: snapshot.data ?? '',
+                      messageController: messageController,
+                      pickImageFromGallery:
+                          _imageController.pickImageFromGallery,
+                      removePic: _imageController.removePic,
+                      sendMessage: _sendMessage,
+                    ),
+                    snapshot.data != '' && snapshot.data != null
+                        ? Positioned(
+                            bottom: 60,
+                            child: Card(
+                              child: Padding(
+                                padding: const EdgeInsets.all(8.0),
+                                child: Image.file(
+                                  File(snapshot.data ?? ''),
+                                  width: 150,
+                                ),
+                              ),
+                            ),
+                          )
+                        : Container(),
+                  ],
+                );
+              },
+            ),*/
+          ],
+        ),
+      ),
+    );
+  }
+}
