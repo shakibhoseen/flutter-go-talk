@@ -56,7 +56,7 @@ class HttpChatRepository implements ChatRepository {
         url: ChatEndpoints.messages(conversationId),
         query: {
           'limit': limit,
-          'before_id': beforeId,
+          'before_id': ?beforeId,
         },
       ),
     );

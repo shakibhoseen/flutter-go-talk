@@ -78,6 +78,25 @@ class ChatSocketService {
     );
   }
 
+  /// Sends a seen acknowledgment (`ack_seen`) via WebSocket for instant blue ticks
+  /// following industry-standard WhatsApp/Telegram real-time patterns.
+  void sendSeenAck({
+    required String conversationId,
+    required String messageId,
+    int senderId = 0,
+  }) {
+    send(
+      jsonEncode({
+        'type': 'ack_seen',
+        'payload': {
+          'conversation_id': conversationId,
+          'message_id': int.tryParse(messageId) ?? messageId,
+          'sender_id': senderId,
+        },
+      }),
+    );
+  }
+
   void disconnect() {
     _channel?.sink.close();
     _channel = null;

@@ -2,8 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:whatsapp_flutter_go/core/navigation/navigation_service.dart';
-import 'package:whatsapp_flutter_go/core/state/common_base_bloc.dart';
-import 'package:whatsapp_flutter_go/core/state/cursor/cursor_pagination_response.dart';
 import 'package:whatsapp_flutter_go/feature/chat_inbox/data/inbox_message_list_cursor_bloc.dart';
 import 'package:whatsapp_flutter_go/feature/chat_inbox/presentation/widgets/message_design.dart';
 import 'package:whatsapp_flutter_go/feature/home/model/chat_message.dart';
@@ -69,20 +67,48 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
 
   void _handleSocketEvent(dynamic raw) {
     final event = decodeSocketEvent(raw);
-    if (event == null || event['type'] != 'new_message') return;
+    if (event == null) return;
 
+    final type = event['type'];
     final payload = event['payload'];
     if (payload is! Map) return;
     final json = Map<String, dynamic>.from(payload);
     if (json['conversation_id']?.toString() != conversationArgs?.id) return;
 
-    inboxBloc?.upsertLocalItem(
-      ChatMessage.fromJson(json, currentUserId: _myId),
-    );
+    if (type == 'new_message') {
+      final message = ChatMessage.fromJson(json, currentUserId: _myId);
+      inboxBloc?.upsertLocalItem(message);
+      if (!message.isMine) {
+        ChatSocketService.instance.sendSeenAck(
+          conversationId: conversationArgs!.id,
+          messageId: message.id,
+          senderId: int.tryParse(message.senderId) ?? 0,
+        );
+      }
+    } else if (type == 'ack_seen' || type == 'message_seen') {
+      final seenMessageId = json['message_id']?.toString();
+      if (seenMessageId != null) {
+        final items = inboxBloc?.cursorPageHolder.items ?? [];
+        bool changed = false;
+        for (final item in items) {
+          if (item.isMine && !item.isSeen) {
+            inboxBloc?.upsertLocalItem(
+              item.copyWith(isSeen: true),
+              emitState: false,
+            );
+            changed = true;
+          }
+        }
+        if (changed) {
+          inboxBloc?.emitCurrentLocalData();
+        }
+      }
+    }
   }
 
   @override
   void dispose() {
+    _socketSubscription?.cancel();
     _controller.dispose();
     super.dispose();
   }
@@ -105,23 +131,26 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
         child: Column(
           children: [
             inboxBloc!.build(
-              //buildWhen: (previous, current) => current is SuccessWithPaginationState ,
               builder: (context, state) {
-                if (state
-                    is SuccessWithPaginationState<
-                      CursorPaginationResponse<ChatMessage>
-                    >) {
-                  final data = state.data;
-                }
                 final data = inboxBloc?.cursorPageHolder.items ?? [];
+                if (data.isNotEmpty) {
+                  final latestMessage = data.first;
+                  if (!latestMessage.isMine && !latestMessage.isSeen) {
+                    ChatSocketService.instance.sendSeenAck(
+                      conversationId: conversationArgs!.id,
+                      messageId: latestMessage.id,
+                      senderId: int.tryParse(latestMessage.senderId) ?? 0,
+                    );
+                  }
+                }
                 return Expanded(
                   child: ListView.builder(
                     reverse: true,
                     padding: const EdgeInsets.only(bottom: 8),
                     controller: cursorScrollController?.controller,
-                    itemCount: data.length ?? 0,
+                    itemCount: data.length,
                     itemBuilder: (context, index) {
-                      if (index == 0) {
+                      if (index+1 == data.length) {
                         return designMessage(
                           data.elementAt(index),
                           _resendMessage,
@@ -130,7 +159,7 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
                           true,
                         );
                       }
-                      final oldModel = data.elementAt(index - 1);
+                      final oldModel = data.elementAt(index + 1);
                       final newModel = data.elementAt(index);
                       bool todayIndicator = false;
                       if (oldModel.timeStamp?.dateCompare == null ||
@@ -174,40 +203,6 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
                 ),
               ),
             ),
-
-            /* StreamBuilder<String>(
-              stream: _imageController.getImageState(),
-              builder: (context, snapshot) {
-                return Stack(
-                  alignment: Alignment.bottomLeft,
-                  clipBehavior: Clip.none,
-                  children: [
-                    bottomDesign(
-                      value: snapshot.data ?? '',
-                      messageController: messageController,
-                      pickImageFromGallery:
-                          _imageController.pickImageFromGallery,
-                      removePic: _imageController.removePic,
-                      sendMessage: _sendMessage,
-                    ),
-                    snapshot.data != '' && snapshot.data != null
-                        ? Positioned(
-                            bottom: 60,
-                            child: Card(
-                              child: Padding(
-                                padding: const EdgeInsets.all(8.0),
-                                child: Image.file(
-                                  File(snapshot.data ?? ''),
-                                  width: 150,
-                                ),
-                              ),
-                            ),
-                          )
-                        : Container(),
-                  ],
-                );
-              },
-            ),*/
           ],
         ),
       ),

@@ -33,8 +33,16 @@ class ChatMessage extends BaseModel {
     this.isMine = false,
     this.isSeen = false,
     this.timeStamp,
+    this.senderName = '',
+    this.senderAvatar = '',
+    this.readBy = const [],
+    this.readCount = 0,
   });
 
+  final String senderName;
+  final String senderAvatar;
+  final List<ReadReceiptUser> readBy;
+  final int readCount;
   final String id;
   final String senderId;
   final String receiverId;
@@ -58,6 +66,12 @@ class ChatMessage extends BaseModel {
     final sentAtMillis = json['sent_at'] is int
         ? json['sent_at'] as int
         : sentAtDateTime.millisecondsSinceEpoch;
+    final readByList = (json['read_by'] as List<dynamic>?)
+        ?.map((e) => ReadReceiptUser.fromJson(Map<String, dynamic>.from(e)))
+        .toList() ??
+        [];
+
+    final readCount = json['read_count'] as int? ?? 0;
 
     return ChatMessage(
       id: json['id']?.toString() ?? '',
@@ -68,6 +82,22 @@ class ChatMessage extends BaseModel {
       messageType: json['message_type'] as String? ?? 'text',
       isMine: currentUserId != null && senderId == currentUserId,
       timeStamp: TimeStamp.fromDatePublish(sentAtMillis),
+    );
+  }
+
+  ChatMessage copyWith({
+    bool? isSeen,
+  }) {
+    return ChatMessage(
+      id: id,
+      senderId: senderId,
+      receiverId: receiverId,
+      message: message,
+      sentAt: sentAt,
+      messageType: messageType,
+      isMine: isMine,
+      isSeen: isSeen ?? this.isSeen,
+      timeStamp: timeStamp,
     );
   }
 
@@ -84,4 +114,63 @@ class ChatMessage extends BaseModel {
       if (timeStamp != null) 'time_stamp': timeStamp!.toJson(),
     };
   }
+}
+
+
+class ReadReceiptUser extends BaseModel{
+  final int userId;
+  final String name;
+  final String avatarUrl;
+
+  const ReadReceiptUser({
+    required this.userId,
+    required this.name,
+    required this.avatarUrl,
+  });
+
+
+  factory ReadReceiptUser.fromJson(Map<String, dynamic> json) {
+    return ReadReceiptUser(
+      userId: json['user_id'] is int
+          ? json['user_id'] as int
+          : int.tryParse(json['user_id']?.toString() ?? '0') ?? 0,
+      name: json['name'] as String? ?? '',
+      avatarUrl: json['avatar_url'] as String? ?? '',
+    );
+  }
+
+  @override
+  Map<String, dynamic> toJson() {
+    return {
+      'user_id': userId,
+      'name': name,
+      'avatar_url': avatarUrl,
+    };
+  }
+
+  ReadReceiptUser copyWith({
+    int? userId,
+    String? name,
+    String? avatarUrl,
+  }) {
+    return ReadReceiptUser(
+      userId: userId ?? this.userId,
+      name: name ?? this.name,
+      avatarUrl: avatarUrl ?? this.avatarUrl,
+    );
+  }
+
+  @override
+  String toString() =>
+      'ReadReceiptUser(userId: $userId, name: $name, avatarUrl: $avatarUrl)';
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+          other is ReadReceiptUser &&
+              runtimeType == other.runtimeType &&
+              userId == other.userId;
+
+  @override
+  int get hashCode => userId.hashCode;
 }
