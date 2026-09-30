@@ -13,8 +13,4 @@ abstract class LoginRepository {
   });
 
 
-  Future<User> getProfile({
-     String? id,
-  });
-
 }

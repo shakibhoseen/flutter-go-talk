@@ -71,16 +71,4 @@ class AuthLoginRepository implements LoginRepository {
     _ => null,
   };
 
-  @override
-  Future<User> getProfile({String? id}) async {
-    final dataAPi = GlobalDataApi.instance;
-    final response = await dataAPi.getResponse(url: 'users/me');
-
-    final login = LoginResponse.fromJson(response);
-    if (login.user != null) {
-      return login.user!;
-    }
-    // TODO: implement getProfile
-    throw UnimplementedError();
-  }
 }

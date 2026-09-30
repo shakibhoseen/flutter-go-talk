@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:whatsapp_flutter_go/feature/profile/bloc/profile_bloc.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:whatsapp_flutter_go/core/db/network/socket/chat_socket_service.dart';
@@ -14,6 +16,7 @@ import 'package:whatsapp_flutter_go/core/state/common_base_bloc.dart';
 import '../../login/model/login_response.dart';
 import 'chat_page.dart';
 import 'profile_page.dart';
+import '../../profile/presentation/profile_edit_screen.dart';
 import 'user_page.dart';
 import 'view_model/chat_view_model.dart';
 import 'view_model/view_model.dart';
@@ -26,8 +29,14 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  final viewModel = ViewModel();
+  late final ViewModel viewModel;
   final chatViewModel = ChatViewModel();
+
+  @override
+  void initState() {
+    super.initState();
+    viewModel = ViewModel(context.read<ProfileBloc>());
+  }
 
   @override
   void dispose() {
@@ -96,6 +105,17 @@ class _HomeScreenState extends State<HomeScreen> {
                       NavigationService.removeALlAndReplace(AuthRoutes.login);
                     },
                     child: const Text('Logout'),
+                  ),
+                  PopupMenuItem(
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => const ProfileEditScreen(),
+                        ),
+                      );
+                    },
+                    child: const Text('Profile'),
                   ),
                   const PopupMenuItem(child: Text('Setting')),
                   const PopupMenuItem(child: Text('Privacy')),

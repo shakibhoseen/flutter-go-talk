@@ -1,19 +1,7 @@
-import 'package:whatsapp_flutter_go/core/state/simple_bloc_parent.dart';
-import 'package:whatsapp_flutter_go/feature/login/data/auth_login_repository.dart';
-
-import '../../../login/model/login_response.dart';
+import 'package:whatsapp_flutter_go/feature/profile/bloc/profile_bloc.dart';
 
 class ViewModel {
-  final profileBloc = SimpleBlocParent<User>();
+  final ProfileBloc profileBloc;
 
-  ViewModel() {
-    setUp();
-    profileBloc.execute();
-  }
-
-  void setUp() {
-    profileBloc.setFunction(
-      attach: (event) => AuthLoginRepository().getProfile(),
-    );
-  }
+  ViewModel(this.profileBloc);
 }

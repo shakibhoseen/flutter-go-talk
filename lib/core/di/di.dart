@@ -6,6 +6,7 @@ import 'package:get_it/get_it.dart';
 import '../navigation/navigation_service.dart';
 import '../services/my_shared_pref.dart';
 import '../session/session_cubit.dart';
+import '../../feature/profile/bloc/profile_bloc.dart';
 
 final locator = GetIt.instance;
 
@@ -31,5 +32,4 @@ Future<void> diSetup() async {
   locator.registerLazySingleton<MySharedPref>(() => MySharedPref());
   final sessionCubit = SessionCubit();
   locator.registerSingleton<SessionCubit>(sessionCubit);
-
 }

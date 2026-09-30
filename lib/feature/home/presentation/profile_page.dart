@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:whatsapp_flutter_go/core/state/common_base_bloc.dart';
 import 'package:whatsapp_flutter_go/core/theme/app_colors.dart';
 
+import '../../../core/config/app_flavor_config.dart';
+import '../../../core/db/network/network_service_type.dart';
 import '../../login/model/login_response.dart';
 import 'view_model/view_model.dart';
 
@@ -32,7 +34,8 @@ class ProfilePage extends StatelessWidget {
               CircleAvatar(
                 radius: 48,
                 backgroundColor: AppColors.primaryColor.shade100,
-                child: Text(
+                backgroundImage: user?.avatarUrl !=null? NetworkImage(_getFullUrl(user?.avatarUrl)): null,
+                child: user?.avatarUrl !=null? null:Text(
                   (user?.name?.isNotEmpty ?? false)
                       ? user!.name![0].toUpperCase()
                       : '?',
@@ -57,5 +60,17 @@ class ProfilePage extends StatelessWidget {
         );
       },
     );
+  }
+  String _getFullUrl(String? path) {
+    if (path == null || path.isEmpty) return 'https://cdn.pixabay.com/photo/2015/10/05/22/37/blank-profile-picture-973460_1280.png';
+    if (path.startsWith("http")) return path;
+    final baseUrl = AppFlavorConfig.baseUrlFor(NetworkServiceType.chat);
+
+    if (baseUrl.endsWith('/') && path.startsWith('/')) {
+      return baseUrl + path.substring(1);
+    } else if (!baseUrl.endsWith('/') && !path.startsWith('/')) {
+      return '$baseUrl/$path';
+    }
+    return baseUrl + path;
   }
 }

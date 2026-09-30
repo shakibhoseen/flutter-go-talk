@@ -6,6 +6,8 @@ import 'package:dio/dio.dart';
 import '../db/network/auth_endpoints.dart';
 import '../db/network/network_base_url_resolver.dart';
 import '../db/network/network_service_type.dart';
+import '../config/app_flavor_config.dart';
+import '../../feature/login/model/login_response.dart';
 import 'auth_session.dart';
 
 /// Trades the refresh token for a new access token.
@@ -40,54 +42,53 @@ final class AuthTokenRefresher {
   }
 
   Future<bool> _refresh() async {
-    return false;
-    // final refreshToken = AuthSession.tokens?.refreshToken ?? '';
-    // if (refreshToken.isEmpty) {
-    //   log('no refresh token to trade', name: 'AuthTokenRefresher');
-    //   return false;
-    // }
+    final refreshToken = AuthSession.tokens?.refreshToken ?? '';
+    if (refreshToken.isEmpty) {
+      log('no refresh token to trade', name: 'AuthTokenRefresher');
+      return false;
+    }
 
     // Logged by hand rather than through the shared `Logger` interceptor: the
     // request body *is* the refresh token, and the interceptor prints bodies.
     log('access token rejected, refreshing…', name: 'AuthTokenRefresher');
-    //
-    // try {
-    //   final dio = Dio(
-    //     BaseOptions(
-    //       baseUrl: NetworkBaseUrlResolver.resolve(NetworkServiceType.auth),
-    //       responseType: ResponseType.json,
-    //       connectTimeout: const Duration(seconds: 30),
-    //       receiveTimeout: const Duration(seconds: 30),
-    //       headers: const {'Accept': 'application/json'},
-    //     ),
-    //   );
-    //   final response = await dio.post(
-    //     AuthEndpoints.refresh(),
-    //     data: {'refresh_token': refreshToken},
-    //   );
-    //
-    //   final body = response.data;
-    //   final data = body is Map ? body['data'] : null;
-    //   if (data is! Map) {
-    //     log('refresh response had no data block', name: 'AuthTokenRefresher');
-    //     return false;
-    //   }
-    //
-    //   final refreshed = LoginResponse.fromJson(Map<String, dynamic>.from(data));
-    //   if (!refreshed.hasTokens) {
-    //     return false;
-    //   }
-    //   // The server rotates the refresh token too, so the whole pair is
-    //   // replaced — keeping the old one would fail the next refresh.
-    //   AuthSession.start(refreshed);
-    //   log(
-    //     'refreshed, next expiry in ${refreshed.expiresIn}s',
-    //     name: 'AuthTokenRefresher',
-    //   );
-    //   return true;
-    // } catch (error) {
-    //   log('refresh failed: $error', name: 'AuthTokenRefresher');
-    //   return false;
-    // }
+    
+    try {
+      final dio = Dio(
+        BaseOptions(
+          baseUrl: AppFlavorConfig.baseUrlFor(NetworkServiceType.auth),
+          responseType: ResponseType.json,
+          connectTimeout: const Duration(seconds: 30),
+          receiveTimeout: const Duration(seconds: 30),
+          headers: const {'Accept': 'application/json'},
+        ),
+      );
+      final response = await dio.post(
+        'auth/refresh',
+        data: {'refresh_token': refreshToken},
+      );
+    
+      final body = response.data;
+      final data = body is Map ? body : null;
+      if (data is! Map) {
+        log('refresh response had no data block', name: 'AuthTokenRefresher');
+        return false;
+      }
+    
+      final refreshed = LoginResponse.fromJson(Map<String, dynamic>.from(data));
+      if (!refreshed.hasTokens) {
+        return false;
+      }
+      // The server rotates the refresh token too, so the whole pair is
+      // replaced — keeping the old one would fail the next refresh.
+      AuthSession.start(refreshed);
+      log(
+        'refreshed successfully',
+        name: 'AuthTokenRefresher',
+      );
+      return true;
+    } catch (error) {
+      log('refresh failed: $error', name: 'AuthTokenRefresher');
+      return false;
+    }
   }
 }
