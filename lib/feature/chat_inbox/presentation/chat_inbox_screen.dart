@@ -150,38 +150,66 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
                     controller: cursorScrollController?.controller,
                     itemCount: data.length,
                     itemBuilder: (context, index) {
+                      final newModel = data.elementAt(index);
 
-                      if (index+1 == data.length) {
+                      // Newer message (the one below this message on the screen)
+                      final newerModel = index > 0 ? data.elementAt(index - 1) : null;
+                      
+                      // Profile visibility logic
+                      bool showProfile = false;
+                      if (!newModel.isMine) {
+                        if (newerModel == null) {
+                          // This is the absolute newest message in the whole chat
+                          showProfile = true;
+                        } else if (newerModel.senderId != newModel.senderId) {
+                          // The message below is from a different sender
+                          showProfile = true;
+                        } else {
+                          // Same sender below. Check time gap.
+                          // If gap is medium or big (>= 10 minutes), show profile here too.
+                          final gap = (newModel.sentAt.millisecondsSinceEpoch - 
+                                       newerModel.sentAt.millisecondsSinceEpoch).abs();
+                          if (gap >= 600000) {
+                            showProfile = true;
+                          }
+                        }
+                      }
+
+                      // Oldest message edge case
+                      if (index + 1 == data.length) {
                         return designMessage(
-                          data.elementAt(index),
+                          newModel,
                           _resendMessage,
-                          false,
-                          0,
-                          true,
-                          false,
+                          false, // isCompare
+                          0,     // before (time)
+                          true,  // todayIndicator
+                          !newModel.isMine, // showSenderName (top message always shows name)
+                          showProfile,
                         );
                       }
+
+                      // Older message (the one above this message on the screen)
                       final oldModel = data.elementAt(index + 1);
-                      final newModel = data.elementAt(index);
+
                       bool todayIndicator = false;
                       bool showSenderName = false;
+                      
                       if (!newModel.isMine && oldModel.senderId != newModel.senderId) {
-                        showSenderName = true; // নাম দেখাব
+                        showSenderName = true;
                       }
-                      if (oldModel.timeStamp?.dateCompare == null ||
-                          newModel.timeStamp?.dateCompare == null) {
-                        todayIndicator = false;
-                      } else if (oldModel.timeStamp?.dateCompare !=
-                          newModel.timeStamp?.dateCompare) {
+
+                      if (oldModel.timeStamp?.dateCompare != newModel.timeStamp?.dateCompare) {
                         todayIndicator = true;
                       }
+
                       return designMessage(
                         newModel,
                         _resendMessage,
-                        true,
+                        true, // isCompare
                         oldModel.sentAt.millisecondsSinceEpoch,
                         todayIndicator,
                         showSenderName,
+                        showProfile,
                       );
                     },
                   ),

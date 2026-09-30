@@ -114,10 +114,12 @@ Widget designMessage(
   int before,
   bool todayIndicator,
   bool showSenderName,
+  bool showProfile,
 ) {
+  final hold = isCompare ? showTimeOrNot(before, model.sentAt.millisecondsSinceEpoch) : null;
   return Column(
     children: [
-      if (isCompare) showTimeOrNot(before, model.sentAt.millisecondsSinceEpoch),
+      if (hold != null) hold.$1,
       if (todayIndicator)
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
@@ -138,12 +140,15 @@ Widget designMessage(
           ),
         ),
       if (todayIndicator) UIHelper.verticalSpace(20),
-      if (showSenderName)
-        Padding(
-          padding: const EdgeInsets.only(left: 12, bottom: 2),
-          child: Text(
-            model.senderName,
-            style: TextStyle(fontSize: 11, color: Colors.grey),
+      if (showSenderName || (hold?.$2?? false))
+        Align(
+          alignment: AlignmentGeometry.centerLeft,
+          child: Padding(
+            padding: const EdgeInsets.only(left: 44, bottom: 2),
+            child: Text(
+              model.senderName,
+              style: TextStyle(fontSize: 11, color: Colors.grey),
+            ),
           ),
         ),
       Align(
@@ -152,6 +157,7 @@ Widget designMessage(
           padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 2),
           child: Row(
             mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               /*              if (model.isFailed ?? false)
                 IconButton(
@@ -167,7 +173,7 @@ Widget designMessage(
                 Padding(
                   padding: const EdgeInsets.only(right: 8.0),
                   child: ClipOval(
-                    child: CachedNetworkImage(
+                    child:(showProfile)? CachedNetworkImage(
                       imageUrl: _getFullUrl(model.senderAvatar),
                       width: 28,
                       height: 28,
@@ -177,7 +183,7 @@ Widget designMessage(
                         backgroundColor: Colors.grey.shade300,
                         child: const Icon(Icons.person, size: 16, color: Colors.white),
                       ),
-                    ),
+                    ): SizedBox(width: 28,),
                   ),
                 ),
               Container(
@@ -291,18 +297,18 @@ Widget designMessage(
   );
 }
 
-Widget showTimeOrNot(int before, int after) {
+(Widget, bool) showTimeOrNot(int before, int after) { //space, name show or not/profile show or not
   int difference = (before - after).abs();
 
   if (difference < 3600000) {
     // Less than an hour
     if (difference < 600000) {
       // Less than 10 minutes
-      return UIHelper.verticalSpace(3); // Tiny
+      return ( UIHelper.verticalSpace(3), false); // Small; // Tiny
     } else {
-      return UIHelper.verticalSpace(24); // Mid-sized
+      return (UIHelper.verticalSpace(24), true); // Mid-sized
     }
   } else {
-    return UIHelper.verticalSpace(32); // Big
+    return (UIHelper.verticalSpace(32),true); // Big
   }
 }
