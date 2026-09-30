@@ -13,7 +13,7 @@ String _getFullUrl(String path) {
   if (path.isEmpty) return "";
   if (path.startsWith("http")) return path;
   final baseUrl = AppFlavorConfig.baseUrlFor(NetworkServiceType.chat);
-  
+
   if (baseUrl.endsWith('/') && path.startsWith('/')) {
     return baseUrl + path.substring(1);
   } else if (!baseUrl.endsWith('/') && !path.startsWith('/')) {
@@ -115,8 +115,11 @@ Widget designMessage(
   bool todayIndicator,
   bool showSenderName,
   bool showProfile,
+  bool isGroup,
 ) {
-  final hold = isCompare ? showTimeOrNot(before, model.sentAt.millisecondsSinceEpoch) : null;
+  final hold = isCompare
+      ? showTimeOrNot(before, model.sentAt.millisecondsSinceEpoch)
+      : null;
   return Column(
     children: [
       if (hold != null) hold.$1,
@@ -140,7 +143,7 @@ Widget designMessage(
           ),
         ),
       if (todayIndicator) UIHelper.verticalSpace(20),
-      if (showSenderName || (hold?.$2?? false))
+      if (showSenderName)
         Align(
           alignment: AlignmentGeometry.centerLeft,
           child: Padding(
@@ -169,21 +172,27 @@ Widget designMessage(
                       Icons.error,
                       color: Colors.red,
                     )),*/
-              if (!model.isMine)
+              if (!model.isMine && isGroup)
                 Padding(
                   padding: const EdgeInsets.only(right: 8.0),
                   child: ClipOval(
-                    child:(showProfile)? CachedNetworkImage(
-                      imageUrl: _getFullUrl(model.senderAvatar),
-                      width: 28,
-                      height: 28,
-                      fit: BoxFit.cover,
-                      errorWidget: (context, url, error) => CircleAvatar(
-                        radius: 14,
-                        backgroundColor: Colors.grey.shade300,
-                        child: const Icon(Icons.person, size: 16, color: Colors.white),
-                      ),
-                    ): SizedBox(width: 28,),
+                    child: (showProfile)
+                        ? CachedNetworkImage(
+                            imageUrl: _getFullUrl(model.senderAvatar),
+                            width: 28,
+                            height: 28,
+                            fit: BoxFit.cover,
+                            errorWidget: (context, url, error) => CircleAvatar(
+                              radius: 14,
+                              backgroundColor: Colors.grey.shade300,
+                              child: const Icon(
+                                Icons.person,
+                                size: 16,
+                                color: Colors.white,
+                              ),
+                            ),
+                          )
+                        : SizedBox(width: 28),
                   ),
                 ),
               Container(
@@ -220,7 +229,6 @@ Widget designMessage(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
-
                     Flex(
                       mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.end,
@@ -273,42 +281,49 @@ Widget designMessage(
           mainAxisAlignment: MainAxisAlignment.end,
           children: [
             // लুপ চালিয়ে ছোট ছোট Avatar দেখাব
-            ...model.readBy.map((user) => Padding(
-                  padding: const EdgeInsets.only(left: 2.0),
-                  child: ClipOval(
-                    child: CachedNetworkImage(
-                      imageUrl: _getFullUrl(user.avatarUrl),
-                      width: 14,
-                      height: 14,
-                      fit: BoxFit.cover,
-                      errorWidget: (context, url, error) => CircleAvatar(
-                        radius: 7,
-                        backgroundColor: Colors.grey.shade300,
-                        child: const Icon(Icons.person, size: 10, color: Colors.white),
+            ...model.readBy.map(
+              (user) => Padding(
+                padding: const EdgeInsets.only(left: 2.0),
+                child: ClipOval(
+                  child: CachedNetworkImage(
+                    imageUrl: _getFullUrl(user.avatarUrl),
+                    width: 14,
+                    height: 14,
+                    fit: BoxFit.cover,
+                    errorWidget: (context, url, error) => CircleAvatar(
+                      radius: 7,
+                      backgroundColor: Colors.grey.shade300,
+                      child: const Icon(
+                        Icons.person,
+                        size: 10,
+                        color: Colors.white,
                       ),
                     ),
                   ),
-                )),
+                ),
+              ),
+            ),
             if (model.readCount > 3)
               Text('+${model.readCount - 3}', style: TextStyle(fontSize: 10)),
           ],
-        )
+        ),
     ],
   );
 }
 
-(Widget, bool) showTimeOrNot(int before, int after) { //space, name show or not/profile show or not
+(Widget, bool) showTimeOrNot(int before, int after) {
+  //space, name show or not/profile show or not
   int difference = (before - after).abs();
 
   if (difference < 3600000) {
     // Less than an hour
     if (difference < 600000) {
       // Less than 10 minutes
-      return ( UIHelper.verticalSpace(3), false); // Small; // Tiny
+      return (UIHelper.verticalSpace(3), false); // Small; // Tiny
     } else {
       return (UIHelper.verticalSpace(24), true); // Mid-sized
     }
   } else {
-    return (UIHelper.verticalSpace(32),true); // Big
+    return (UIHelper.verticalSpace(32), true); // Big
   }
 }

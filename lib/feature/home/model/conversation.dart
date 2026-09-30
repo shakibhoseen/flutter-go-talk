@@ -25,7 +25,7 @@ class Conversation extends BaseModel {
   final int unreadCount;
   final DateTime createdAt;
 
-  bool get isGroup => type == 'group';
+  bool get isGroup => type.toLowerCase() == 'group';
 
   String get displayTitle => title ?? (isGroup ? 'Group chat' : 'Direct message');
 

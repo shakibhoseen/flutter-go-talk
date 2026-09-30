@@ -151,13 +151,14 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
                     itemCount: data.length,
                     itemBuilder: (context, index) {
                       final newModel = data.elementAt(index);
+                      final isGroup = conversationArgs?.isGroup == true;
 
                       // Newer message (the one below this message on the screen)
                       final newerModel = index > 0 ? data.elementAt(index - 1) : null;
                       
-                      // Profile visibility logic
+                      // Profile visibility logic (only applicable for group chats)
                       bool showProfile = false;
-                      if (!newModel.isMine) {
+                      if (isGroup && !newModel.isMine) {
                         if (newerModel == null) {
                           // This is the absolute newest message in the whole chat
                           showProfile = true;
@@ -183,8 +184,9 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
                           false, // isCompare
                           0,     // before (time)
                           true,  // todayIndicator
-                          !newModel.isMine, // showSenderName (top message always shows name)
+                          isGroup ? !newModel.isMine : false, // showSenderName (top message shows name only in groups)
                           showProfile,
+                          isGroup
                         );
                       }
 
@@ -194,8 +196,17 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
                       bool todayIndicator = false;
                       bool showSenderName = false;
                       
-                      if (!newModel.isMine && oldModel.senderId != newModel.senderId) {
-                        showSenderName = true;
+                      if (isGroup && !newModel.isMine) {
+                        if (oldModel.senderId != newModel.senderId) {
+                          showSenderName = true;
+                        } else {
+                          // Same sender, but check if there's a large time gap
+                          final gap = (oldModel.sentAt.millisecondsSinceEpoch - 
+                                       newModel.sentAt.millisecondsSinceEpoch).abs();
+                          if (gap >= 600000) { // 10 minutes
+                            showSenderName = true;
+                          }
+                        }
                       }
 
                       if (oldModel.timeStamp?.dateCompare != newModel.timeStamp?.dateCompare) {
@@ -210,6 +221,7 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
                         todayIndicator,
                         showSenderName,
                         showProfile,
+                        isGroup
                       );
                     },
                   ),
