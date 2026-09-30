@@ -9,6 +9,7 @@ class Conversation extends BaseModel {
     required this.id,
     required this.type,
     this.title,
+    this.avatarUrl,
     this.lastMessageContent,
     this.lastMessageSenderId,
     this.lastMessageAt,
@@ -19,6 +20,7 @@ class Conversation extends BaseModel {
   final String id;
   final String type; // 'group' | 'direct'
   final String? title;
+  final String? avatarUrl;
   final String? lastMessageContent;
   final int? lastMessageSenderId;
   final DateTime? lastMessageAt;
@@ -34,6 +36,7 @@ class Conversation extends BaseModel {
       id: json['id'] as String? ?? '',
       type: json['type'] as String? ?? 'direct',
       title: json['title'] as String?,
+      avatarUrl: json['avatar_url'] as String?,
       lastMessageContent: json['last_message_content'] as String?,
       lastMessageSenderId: json['last_message_sender_id'] as int?,
       lastMessageAt: DateTime.tryParse(json['last_message_at'] as String? ?? ''),
@@ -50,6 +53,7 @@ class Conversation extends BaseModel {
       'id': id,
       'type': type,
       'title': title,
+      'avatar_url': avatarUrl,
       'last_message_content': lastMessageContent,
       'last_message_sender_id': lastMessageSenderId,
       'last_message_at': lastMessageAt?.toIso8601String(),
@@ -69,6 +73,7 @@ class Conversation extends BaseModel {
       id: id,
       type: type,
       title: title,
+      avatarUrl: avatarUrl,
       lastMessageContent: content ?? lastMessageContent,
       lastMessageSenderId: senderId ?? lastMessageSenderId,
       lastMessageAt: at ?? lastMessageAt,

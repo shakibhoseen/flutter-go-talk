@@ -1,8 +1,11 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:whatsapp_flutter_go/core/config/app_flavor_config.dart';
+import 'package:whatsapp_flutter_go/core/db/network/network_service_type.dart';
 import 'package:whatsapp_flutter_go/core/navigation/navigation_service.dart';
 import 'package:whatsapp_flutter_go/feature/chat_inbox/data/inbox_message_list_cursor_bloc.dart';
+import 'package:whatsapp_flutter_go/feature/chat_inbox/presentation/group_info_screen.dart';
 import 'package:whatsapp_flutter_go/feature/chat_inbox/presentation/widgets/message_design.dart';
 import 'package:whatsapp_flutter_go/feature/home/model/chat_message.dart';
 
@@ -28,6 +31,14 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
 
   String? get _myId => AuthSession.tokens?.user?.id?.toString();
   MyCursorScrollController? cursorScrollController;
+
+  String _getFullUrl(String? path) {
+    if (path == null || path.isEmpty) return '';
+    if (path.startsWith('http')) return path;
+    // We assume AppFlavorConfig is imported, but we might need to add import
+    final baseUrl = AppFlavorConfig.baseUrlFor(NetworkServiceType.chat);
+    return '$baseUrl/$path';
+  }
 
   void _resendMessage() {}
 
@@ -117,7 +128,53 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
   Widget build(BuildContext context) {
     if (inboxBloc == null) return const SizedBox();
     return Scaffold(
-      appBar: AppBar(title: Text('inbox')),
+      appBar: AppBar(
+        titleSpacing: 0,
+        title: Row(
+          children: [
+            CircleAvatar(
+              radius: 18,
+              backgroundImage: conversationArgs?.avatarUrl != null 
+                  ? NetworkImage(_getFullUrl(conversationArgs!.avatarUrl)) 
+                  : null,
+              child: conversationArgs?.avatarUrl == null 
+                  ? Icon(conversationArgs?.isGroup == true ? Icons.groups : Icons.person) 
+                  : null,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                conversationArgs?.displayTitle ?? '',
+                style: const TextStyle(fontSize: 16),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          if (conversationArgs?.isGroup == true)
+            PopupMenuButton<String>(
+              onSelected: (value) {
+                if (value == 'group_info') {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => GroupInfoScreen(
+                        conversation: conversationArgs!,
+                      ),
+                    ),
+                  );
+                }
+              },
+              itemBuilder: (context) => [
+                const PopupMenuItem(
+                  value: 'group_info',
+                  child: Text('Group Info'),
+                ),
+              ],
+            ),
+        ],
+      ),
       body: Container(
         height: double.infinity,
         width: double.infinity,
