@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "com.example.whatsapp_flutter_go"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = 37
     ndkVersion = flutter.ndkVersion
 
     compileOptions {

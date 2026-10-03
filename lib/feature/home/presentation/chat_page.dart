@@ -4,7 +4,6 @@ import 'package:whatsapp_flutter_go/core/navigation/routes/chat_routes.dart';
 import 'package:whatsapp_flutter_go/core/state/common_base_bloc.dart';
 
 import '../model/conversation.dart';
-import 'chat_thread_page.dart';
 import 'view_model/chat_view_model.dart';
 import 'widgets/conversation_tile.dart';
 

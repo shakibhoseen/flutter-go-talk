@@ -5,7 +5,7 @@ import 'package:whatsapp_flutter_go/core/config/app_flavor_config.dart';
 import 'package:whatsapp_flutter_go/core/db/network/network_service_type.dart';
 import 'package:whatsapp_flutter_go/core/navigation/navigation_service.dart';
 import 'package:whatsapp_flutter_go/feature/chat_inbox/data/inbox_message_list_cursor_bloc.dart';
-import 'package:whatsapp_flutter_go/feature/chat_inbox/presentation/group_info_screen.dart';
+import 'package:whatsapp_flutter_go/feature/group/presentation/group_info_screen.dart';
 import 'package:whatsapp_flutter_go/feature/chat_inbox/presentation/widgets/message_design.dart';
 import 'package:whatsapp_flutter_go/feature/home/model/chat_message.dart';
 
@@ -15,6 +15,8 @@ import '../../../core/session/auth_session.dart';
 import '../../../gen/assets.gen.dart';
 import '../../home/data/socket_event.dart';
 import '../../home/model/conversation.dart';
+import '../../call/presentation/call_screen.dart';
+import '../../call/data/service/call_permission_service.dart';
 
 class ChatInboxScreen extends StatefulWidget {
   const ChatInboxScreen({super.key});
@@ -31,6 +33,8 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
 
   String? get _myId => AuthSession.tokens?.user?.id?.toString();
   MyCursorScrollController? cursorScrollController;
+  StreamSubscription<dynamic>? _blocSubscription;
+  String? _lastAckedMessageId;
 
   String _getFullUrl(String? path) {
     if (path == null || path.isEmpty) return '';
@@ -40,7 +44,44 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
     return '$baseUrl/$path';
   }
 
+  void _checkAndSendSeenAck() {
+    final items = inboxBloc?.cursorPageHolder.items ?? [];
+    if (items.isNotEmpty && conversationArgs?.id != null) {
+      final latestMessage = items.first;
+      if (!latestMessage.isMine && _lastAckedMessageId != latestMessage.id) {
+        _lastAckedMessageId = latestMessage.id;
+        ChatSocketService.instance.sendSeenAck(
+          conversationId: conversationArgs!.id,
+          messageId: latestMessage.id,
+          senderId: int.tryParse(latestMessage.senderId) ?? 0,
+        );
+      }
+    }
+  }
+
   void _resendMessage() {}
+  void _updateLiveWatermark(int userId, String messageId, String name, String avatar) {
+    final items = inboxBloc?.cursorPageHolder.items ?? [];
+    bool changed = false;
+    for (final item in items) {
+      final hasUser = item.readBy.any((u) => u.userId == userId);
+      if (item.id == messageId) {
+        if (!hasUser) {
+          final newReadBy = List<ReadReceiptUser>.from(item.readBy);
+          newReadBy.add(ReadReceiptUser(userId: userId, name: name, avatarUrl: avatar));
+          inboxBloc?.upsertLocalItem(item.copyWith(readBy: newReadBy), emitState: false);
+          changed = true;
+        }
+      } else if (hasUser) {
+        final newReadBy = item.readBy.where((u) => u.userId != userId).toList();
+        inboxBloc?.upsertLocalItem(item.copyWith(readBy: newReadBy), emitState: false);
+        changed = true;
+      }
+    }
+    if (changed) {
+      inboxBloc?.emitCurrentLocalData();
+    }
+  }
 
   @override
   void initState() {
@@ -58,6 +99,9 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
         cursorDataHolder: inboxBloc!.cursorPageHolder,
         isReverse: true,
       );
+      _blocSubscription = inboxBloc?.stream.listen((_) {
+        _checkAndSendSeenAck();
+      });
     }
     _socketSubscription = ChatSocketService.instance.messages.listen(
       _handleSocketEvent,
@@ -89,25 +133,38 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
     if (type == 'new_message') {
       final message = ChatMessage.fromJson(json, currentUserId: _myId);
       inboxBloc?.upsertLocalItem(message);
-      if (!message.isMine) {
-        ChatSocketService.instance.sendSeenAck(
-          conversationId: conversationArgs!.id,
-          messageId: message.id,
-          senderId: int.tryParse(message.senderId) ?? 0,
-        );
+      
+      // Auto move the sender's avatar to this new message, because they obviously read it!
+      final senderIdInt = int.tryParse(message.senderId) ?? 0;
+      if (senderIdInt > 0) {
+        _updateLiveWatermark(senderIdInt, message.id, message.senderName, message.senderAvatar);
       }
-    } else if (type == 'ack_seen' || type == 'message_seen') {
-      final seenMessageId = json['message_id']?.toString();
-      if (seenMessageId != null) {
+
+      if (!message.isMine) {
+        _checkAndSendSeenAck();
+      }
+    } else if (type == 'ack_seen' || type == 'message_seen' || type == 'status_updated') {
+      final statusMessageId = json['message_id']?.toString() ?? json['upto_message_id']?.toString();
+      final status = json['status'] as String?;
+      if (statusMessageId != null) {
         final items = inboxBloc?.cursorPageHolder.items ?? [];
         bool changed = false;
+        bool isSeenEvent = type == 'ack_seen' || type == 'message_seen' || status == 'seen';
+        bool isDeliveredEvent = status == 'delivered';
+
+        final targetId = int.tryParse(statusMessageId) ?? 0;
         for (final item in items) {
-          if (item.isMine && !item.isSeen) {
-            inboxBloc?.upsertLocalItem(
-              item.copyWith(isSeen: true),
-              emitState: false,
-            );
-            changed = true;
+          if (item.isMine) {
+            final currentId = int.tryParse(item.id) ?? 0;
+            if (currentId <= targetId) {
+              if (isSeenEvent && !item.isSeen) {
+                inboxBloc?.upsertLocalItem(item.copyWith(isSeen: true, isDelivered: true), emitState: false);
+                changed = true;
+              } else if (isDeliveredEvent && !item.isDelivered && !item.isSeen) {
+                inboxBloc?.upsertLocalItem(item.copyWith(isDelivered: true), emitState: false);
+                changed = true;
+              }
+            }
           }
         }
         if (changed) {
@@ -119,6 +176,7 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
 
   @override
   void dispose() {
+    _blocSubscription?.cancel();
     _socketSubscription?.cancel();
     _controller.dispose();
     super.dispose();
@@ -172,6 +230,87 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
                   child: Text('Group Info'),
                 ),
               ],
+            )
+          else
+            PopupMenuButton<String>(
+              onSelected: (value) async {
+                final isVideo = value == 'video_call';
+                final hasPermission = await CallPermissionService.instance.requestPermissions(isVideo: isVideo);
+                if (!hasPermission) {
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          isVideo
+                              ? 'Camera and microphone permissions are required for video calls.'
+                              : 'Microphone permission is required for voice calls.',
+                        ),
+                        action: SnackBarAction(
+                          label: 'Settings',
+                          onPressed: () => CallPermissionService.instance.openSettings(),
+                        ),
+                      ),
+                    );
+                  }
+                  return;
+                }
+
+                int? targetId = conversationArgs?.otherUserId;
+                if (targetId == null || targetId == 0) {
+                  final items = inboxBloc?.cursorPageHolder.items ?? [];
+                  for (final m in items) {
+                    if (!m.isMine) {
+                      targetId = int.tryParse(m.senderId);
+                      break;
+                    }
+                  }
+                }
+
+                if (targetId != null && targetId > 0 && context.mounted) {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => CallScreen(
+                        targetUserId: targetId!,
+                        userName: conversationArgs?.displayTitle ?? 'User',
+                        avatarUrl: conversationArgs?.avatarUrl != null
+                            ? _getFullUrl(conversationArgs!.avatarUrl)
+                            : '',
+                        isVideo: isVideo,
+                        isIncoming: false,
+                      ),
+                    ),
+                  );
+                } else if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Cannot initiate call: recipient ID not found'),
+                    ),
+                  );
+                }
+              },
+              itemBuilder: (context) => [
+                const PopupMenuItem(
+                  value: 'audio_call',
+                  child: Row(
+                    children: [
+                      Icon(Icons.call, size: 20),
+                      SizedBox(width: 10),
+                      Text('Voice call'),
+                    ],
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'video_call',
+                  child: Row(
+                    children: [
+                      Icon(Icons.videocam, size: 20),
+                      SizedBox(width: 10),
+                      Text('Video call'),
+                    ],
+                  ),
+                ),
+              ],
             ),
         ],
       ),
@@ -190,28 +329,42 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
             inboxBloc!.build(
               builder: (context, state) {
                 final data = inboxBloc?.cursorPageHolder.items ?? [];
-                if (data.isNotEmpty) {
-                  final latestMessage = data.first;
-                  if (!latestMessage.isMine && !latestMessage.isSeen) {
-                    ChatSocketService.instance.sendSeenAck(
-                      conversationId: conversationArgs!.id,
-                      messageId: latestMessage.id,
-                      senderId: int.tryParse(latestMessage.senderId) ?? 0,
-                    );
+
+                // Cascade logic — must iterate OLDEST→NEWEST (ASC).
+                // data is DESC (newest first), so we iterate reversed() and flip back.
+                // Rule: if message A (older) is seen, all newer messages must also be seen.
+                bool maxSeen = false;
+                bool maxDelivered = false;
+                final cascadedReversed = <ChatMessage>[];
+                for (final m in data.reversed) {
+                  if (m.isMine) {
+                    if (m.isSeen) maxSeen = true;
+                    if (m.isDelivered) maxDelivered = true;
+                  }
+
+                  if (m.isMine && maxSeen && !m.isSeen) {
+                    cascadedReversed.add(m.copyWith(isSeen: true, isDelivered: true));
+                  } else if (m.isMine && maxDelivered && !m.isDelivered && !m.isSeen) {
+                    cascadedReversed.add(m.copyWith(isDelivered: true));
+                  } else {
+                    cascadedReversed.add(m);
                   }
                 }
+                // Flip back to DESC (newest first) for the reversed ListView
+                final cascadedData = cascadedReversed.reversed.toList();
+
                 return Expanded(
                   child: ListView.builder(
                     reverse: true,
                     padding: const EdgeInsets.only(bottom: 8),
                     controller: cursorScrollController?.controller,
-                    itemCount: data.length,
+                    itemCount: cascadedData.length,
                     itemBuilder: (context, index) {
-                      final newModel = data.elementAt(index);
+                      final newModel = cascadedData.elementAt(index);
                       final isGroup = conversationArgs?.isGroup == true;
 
                       // Newer message (the one below this message on the screen)
-                      final newerModel = index > 0 ? data.elementAt(index - 1) : null;
+                      final newerModel = index > 0 ? cascadedData.elementAt(index - 1) : null;
                       
                       // Profile visibility logic (only applicable for group chats)
                       bool showProfile = false;
@@ -234,7 +387,7 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
                       }
 
                       // Oldest message edge case
-                      if (index + 1 == data.length) {
+                      if (index + 1 == cascadedData.length) {
                         return designMessage(
                           newModel,
                           _resendMessage,
@@ -248,7 +401,7 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
                       }
 
                       // Older message (the one above this message on the screen)
-                      final oldModel = data.elementAt(index + 1);
+                      final oldModel = cascadedData.elementAt(index + 1);
 
                       bool todayIndicator = false;
                       bool showSenderName = false;

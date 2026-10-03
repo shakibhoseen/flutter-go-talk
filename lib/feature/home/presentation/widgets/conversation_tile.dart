@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:whatsapp_flutter_go/core/config/app_flavor_config.dart';
+import 'package:whatsapp_flutter_go/core/db/network/network_service_type.dart';
 import 'package:whatsapp_flutter_go/core/helper/relative_time.dart';
 import 'package:whatsapp_flutter_go/core/theme/app_colors.dart';
 
@@ -14,17 +16,50 @@ class ConversationTile extends StatelessWidget {
   final Conversation conversation;
   final VoidCallback onTap;
 
+  String _getFullUrl(String? path) {
+    if (path == null || path.isEmpty) return '';
+    if (path.startsWith('http')) return path;
+    final baseUrl = AppFlavorConfig.baseUrlFor(NetworkServiceType.chat);
+    return '$baseUrl/$path';
+  }
+
   @override
   Widget build(BuildContext context) {
     return ListTile(
       onTap: onTap,
-      leading: CircleAvatar(
-        radius: 24,
-        backgroundColor: AppColors.primaryColor.shade100,
-        child: Icon(
-          conversation.isGroup ? Icons.groups : Icons.person,
-          color: AppColors.primaryColor,
-        ),
+      leading: Stack(
+        children: [
+          CircleAvatar(
+            radius: 24,
+            backgroundColor: AppColors.primaryColor.shade100,
+            backgroundImage: conversation.avatarUrl != null
+                ? NetworkImage(_getFullUrl(conversation.avatarUrl))
+                : null,
+            child: conversation.avatarUrl == null
+                ? Icon(
+                    conversation.isGroup ? Icons.groups : Icons.person,
+                    color: AppColors.primaryColor,
+                  )
+                : null,
+          ),
+          if (conversation.isGroup)
+            Positioned(
+              bottom: 0,
+              right: 0,
+              child: Container(
+                padding: const EdgeInsets.all(2),
+                decoration: const BoxDecoration(
+                  color: Colors.green,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.groups,
+                  size: 12,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+        ],
       ),
       title: Text(
         conversation.displayTitle,

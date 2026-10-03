@@ -76,6 +76,7 @@ dependencies:
   web_socket_channel: ^3.0.3
   flutter_secure_storage: ^9.0.0
   flutter_webrtc: ^1.6.2 # (Calling-er jonno pore lagbe)
+  permission_handler: ^13.0.2
 
 
 

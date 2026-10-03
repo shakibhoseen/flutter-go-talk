@@ -8,6 +8,7 @@ import 'package:whatsapp_flutter_go/core/db/network/network_service_type.dart';
 
 import '../../../../gen/assets.gen.dart';
 import '../../../home/model/chat_message.dart';
+import '../../../../core/session/auth_session.dart';
 
 String _getFullUrl(String path) {
   if (path.isEmpty) return "";
@@ -203,13 +204,9 @@ Widget designMessage(
                 ),
                 decoration: BoxDecoration(
                   color: model.isMine
-                      ? Colors.red.shade400
+                      ? Colors.green.shade400
                       : Colors.grey.shade100,
-                  image: DecorationImage(
-                    image: AssetImage(Assets.darkBg.path),
-                    opacity: 0.7,
-                    fit: BoxFit.cover,
-                  ),
+
                   borderRadius: BorderRadius.only(
                     topLeft: model.isMine
                         ? const Radius.circular(20)
@@ -245,18 +242,24 @@ Widget designMessage(
                         Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            model.isMine ?? false
-                                ? model.isSeen
-                                      ? Icon(
-                                          FontAwesomeIcons.checkDouble.data,
-                                          size: 12,
-                                          color: Colors.green,
-                                        )
-                                      : Icon(
-                                          FontAwesomeIcons.check.data,
-                                          size: 12,
-                                          color: Colors.grey,
-                                        )
+                            model.isMine
+                                ? (model.isSeen
+                                    ? Icon(
+                                        FontAwesomeIcons.checkDouble.data,
+                                        size: 12,
+                                        color: Colors.green,
+                                      )
+                                    : (model.isDelivered
+                                        ? Icon(
+                                            FontAwesomeIcons.checkDouble.data,
+                                            size: 12,
+                                            color: Colors.grey,
+                                          )
+                                        : Icon(
+                                            FontAwesomeIcons.check.data,
+                                            size: 12,
+                                            color: Colors.grey,
+                                          )))
                                 : Container(),
                             Text(
                               '${model.timeStamp?.hourMinute}',
@@ -276,37 +279,45 @@ Widget designMessage(
           ),
         ),
       ),
-      if (model.readBy.isNotEmpty)
-        Row(
-          mainAxisAlignment: MainAxisAlignment.end,
-          children: [
-            // लুপ চালিয়ে ছোট ছোট Avatar দেখাব
-            ...model.readBy.map(
-              (user) => Padding(
-                padding: const EdgeInsets.only(left: 2.0),
-                child: ClipOval(
-                  child: CachedNetworkImage(
-                    imageUrl: _getFullUrl(user.avatarUrl),
-                    width: 14,
-                    height: 14,
-                    fit: BoxFit.cover,
-                    errorWidget: (context, url, error) => CircleAvatar(
-                      radius: 7,
-                      backgroundColor: Colors.grey.shade300,
-                      child: const Icon(
-                        Icons.person,
-                        size: 10,
-                        color: Colors.white,
+      Builder(
+        builder: (context) {
+          final myId = AuthSession.tokens?.user?.id?.toString();
+          final otherReadBy = model.readBy.where((u) => u.userId.toString() != myId).toList();
+          
+          if (otherReadBy.isEmpty) return const SizedBox();
+          
+          return Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              // लুপ চালিয়ে ছোট ছোট Avatar দেখাব
+              ...otherReadBy.map(
+                (user) => Padding(
+                  padding: const EdgeInsets.only(left: 2.0),
+                  child: ClipOval(
+                    child: CachedNetworkImage(
+                      imageUrl: _getFullUrl(user.avatarUrl),
+                      width: 14,
+                      height: 14,
+                      fit: BoxFit.cover,
+                      errorWidget: (context, url, error) => CircleAvatar(
+                        radius: 7,
+                        backgroundColor: Colors.grey.shade300,
+                        child: const Icon(
+                          Icons.person,
+                          size: 10,
+                          color: Colors.white,
+                        ),
                       ),
                     ),
                   ),
                 ),
               ),
-            ),
-            if (model.readCount > 3)
-              Text('+${model.readCount - 3}', style: TextStyle(fontSize: 10)),
-          ],
-        ),
+              if (otherReadBy.length > 3)
+                Text('+${otherReadBy.length - 3}', style: const TextStyle(fontSize: 10)),
+            ],
+          );
+        }
+      ),
     ],
   );
 }

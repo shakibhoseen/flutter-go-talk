@@ -1,3 +1,5 @@
+import 'dart:developer';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:whatsapp_flutter_go/core/helper/my_ui_import.dart';
@@ -111,6 +113,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       context,
                     );
                   }
+                  log('listener login: $state');
                 },
                 child: viewModel.simpleLogin.build(
                   builder: (context, state) {

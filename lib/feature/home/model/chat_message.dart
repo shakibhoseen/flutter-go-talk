@@ -32,6 +32,7 @@ class ChatMessage extends BaseModel {
     this.messageType = 'text',
     this.isMine = false,
     this.isSeen = false,
+    this.isDelivered = false,
     this.timeStamp,
     this.senderName = '',
     this.senderAvatar = '',
@@ -51,6 +52,7 @@ class ChatMessage extends BaseModel {
   final String messageType;
   final bool isMine;
   final bool isSeen;
+  final bool isDelivered;
   final TimeStamp? timeStamp;
 
   /// [currentUserId] is passed in rather than read from session state here,
@@ -87,11 +89,14 @@ class ChatMessage extends BaseModel {
       readBy: readByList,
       readCount: readCount,
       isSeen: readCount > 0,
+      isDelivered: readCount > 0, // Fallback if no specific delivered count exists yet
     );
   }
 
   ChatMessage copyWith({
     bool? isSeen,
+    bool? isDelivered,
+    List<ReadReceiptUser>? readBy,
   }) {
     return ChatMessage(
       id: id,
@@ -102,10 +107,11 @@ class ChatMessage extends BaseModel {
       messageType: messageType,
       isMine: isMine,
       isSeen: isSeen ?? this.isSeen,
+      isDelivered: isDelivered ?? this.isDelivered,
       timeStamp: timeStamp,
       senderName: senderName,
       senderAvatar: senderAvatar,
-      readBy: readBy,
+      readBy: readBy ?? this.readBy,
       readCount: readCount,
     );
   }
@@ -120,6 +126,7 @@ class ChatMessage extends BaseModel {
       'created_at': sentAt.toIso8601String(),
       'message_type': messageType,
       'is_seen': isSeen,
+      'is_delivered': isDelivered,
       if (timeStamp != null) 'time_stamp': timeStamp!.toJson(),
     };
   }

@@ -57,6 +57,8 @@ class ChatSocketService {
 
   void send(Object? message) => _channel?.sink.add(message);
 
+  void sendRaw(Map<String, dynamic> data) => send(jsonEncode(data));
+
   /// Sends a chat message the way the Go backend's hub expects it — the
   /// server both persists it and echoes a `new_message` event back to this
   /// same socket, so the sender's own UI updates from that echo rather than
@@ -80,6 +82,23 @@ class ChatSocketService {
 
   /// Sends a seen acknowledgment (`ack_seen`) via WebSocket for instant blue ticks
   /// following industry-standard WhatsApp/Telegram real-time patterns.
+  void sendDeliveredAck({
+    required String conversationId,
+    required String messageId,
+    int senderId = 0,
+  }) {
+    send(
+      jsonEncode({
+        'type': 'ack_delivered',
+        'payload': {
+          'conversation_id': conversationId,
+          'message_id': int.tryParse(messageId) ?? messageId,
+          'sender_id': senderId,
+        },
+      }),
+    );
+  }
+
   void sendSeenAck({
     required String conversationId,
     required String messageId,

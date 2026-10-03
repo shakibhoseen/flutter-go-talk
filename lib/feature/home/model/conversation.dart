@@ -14,6 +14,7 @@ class Conversation extends BaseModel {
     this.lastMessageSenderId,
     this.lastMessageAt,
     this.unreadCount = 0,
+    this.otherUserId,
     required this.createdAt,
   });
 
@@ -25,6 +26,7 @@ class Conversation extends BaseModel {
   final int? lastMessageSenderId;
   final DateTime? lastMessageAt;
   final int unreadCount;
+  final int? otherUserId;
   final DateTime createdAt;
 
   bool get isGroup => type.toLowerCase() == 'group';
@@ -41,6 +43,7 @@ class Conversation extends BaseModel {
       lastMessageSenderId: json['last_message_sender_id'] as int?,
       lastMessageAt: DateTime.tryParse(json['last_message_at'] as String? ?? ''),
       unreadCount: json['unread_count'] as int? ?? 0,
+      otherUserId: json['other_user_id'] as int?,
       createdAt:
           DateTime.tryParse(json['created_at'] as String? ?? '') ??
           DateTime.now(),
@@ -64,6 +67,32 @@ class Conversation extends BaseModel {
 
   /// Applies a `new_message` socket event's preview fields, keeping
   /// everything else (id, type, title, unread count) as-is.
+  Conversation copyWith({
+    String? id,
+    String? type,
+    String? title,
+    String? avatarUrl,
+    String? lastMessageContent,
+    int? lastMessageSenderId,
+    DateTime? lastMessageAt,
+    int? unreadCount,
+    int? otherUserId,
+    DateTime? createdAt,
+  }) {
+    return Conversation(
+      id: id ?? this.id,
+      type: type ?? this.type,
+      title: title ?? this.title,
+      avatarUrl: avatarUrl ?? this.avatarUrl,
+      lastMessageContent: lastMessageContent ?? this.lastMessageContent,
+      lastMessageSenderId: lastMessageSenderId ?? this.lastMessageSenderId,
+      lastMessageAt: lastMessageAt ?? this.lastMessageAt,
+      unreadCount: unreadCount ?? this.unreadCount,
+      otherUserId: otherUserId ?? this.otherUserId,
+      createdAt: createdAt ?? this.createdAt,
+    );
+  }
+
   Conversation copyWithNewMessage({
     String? content,
     int? senderId,
@@ -78,6 +107,7 @@ class Conversation extends BaseModel {
       lastMessageSenderId: senderId ?? lastMessageSenderId,
       lastMessageAt: at ?? lastMessageAt,
       unreadCount: unreadCount,
+      otherUserId: otherUserId,
       createdAt: createdAt,
     );
   }
