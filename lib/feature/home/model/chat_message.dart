@@ -88,8 +88,8 @@ class ChatMessage extends BaseModel {
       senderAvatar: json['sender_avatar'] as String? ?? '',
       readBy: readByList,
       readCount: readCount,
-      isSeen: readCount > 0,
-      isDelivered: readCount > 0, // Fallback if no specific delivered count exists yet
+      isSeen: json['is_seen'] == true || readCount > 0,
+      isDelivered: json['is_delivered'] == true || json['is_seen'] == true || readCount > 0,
     );
   }
 

@@ -331,28 +331,28 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
               builder: (context, state) {
                 final data = inboxBloc?.cursorPageHolder.items ?? [];
 
-                // Cascade logic — must iterate OLDEST→NEWEST (ASC).
-                // data is DESC (newest first), so we iterate reversed() and flip back.
-                // Rule: if message A (older) is seen, all newer messages must also be seen.
-                bool maxSeen = false;
-                bool maxDelivered = false;
-                final cascadedReversed = <ChatMessage>[];
-                for (final m in data.reversed) {
+                // Chronological cascade: iterates NEWEST (index 0) -> OLDEST (index N).
+                // Rule: If a newer message is seen, all older messages must also be seen.
+                // Rule: If a newer message is delivered, all older messages must also be delivered.
+                bool seenCascade = false;
+                bool deliveredCascade = false;
+                final cascadedData = <ChatMessage>[];
+                for (final m in data) {
                   if (m.isMine) {
-                    if (m.isSeen) maxSeen = true;
-                    if (m.isDelivered) maxDelivered = true;
-                  }
+                    if (m.isSeen) seenCascade = true;
+                    if (m.isDelivered) deliveredCascade = true;
 
-                  if (m.isMine && maxSeen && !m.isSeen) {
-                    cascadedReversed.add(m.copyWith(isSeen: true, isDelivered: true));
-                  } else if (m.isMine && maxDelivered && !m.isDelivered && !m.isSeen) {
-                    cascadedReversed.add(m.copyWith(isDelivered: true));
+                    if (seenCascade && !m.isSeen) {
+                      cascadedData.add(m.copyWith(isSeen: true, isDelivered: true));
+                    } else if (deliveredCascade && !m.isDelivered && !m.isSeen) {
+                      cascadedData.add(m.copyWith(isDelivered: true));
+                    } else {
+                      cascadedData.add(m);
+                    }
                   } else {
-                    cascadedReversed.add(m);
+                    cascadedData.add(m);
                   }
                 }
-                // Flip back to DESC (newest first) for the reversed ListView
-                final cascadedData = cascadedReversed.reversed.toList();
 
                 return Expanded(
                   child: ListView.builder(

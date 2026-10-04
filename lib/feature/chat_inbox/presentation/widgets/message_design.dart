@@ -288,7 +288,7 @@ Widget designMessage(
           final effectiveReadCount = readCount ?? model.readCount;
           final otherReadBy = effectiveReadBy.where((u) => u.userId.toString() != myId).toList();
           
-          if (otherReadBy.isEmpty) return const SizedBox();
+          if (!isGroup || otherReadBy.isEmpty) return const SizedBox();
 
           final isMeInReadBy = effectiveReadBy.any((u) => u.userId.toString() == myId);
           final totalOtherReaders = isMeInReadBy ? effectiveReadCount - 1 : effectiveReadCount;
