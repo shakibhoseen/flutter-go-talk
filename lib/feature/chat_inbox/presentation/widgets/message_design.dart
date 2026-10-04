@@ -116,8 +116,10 @@ Widget designMessage(
   bool todayIndicator,
   bool showSenderName,
   bool showProfile,
-  bool isGroup,
-) {
+  bool isGroup, {
+  List<ReadReceiptUser>? readBy,
+  int? readCount,
+}) {
   final hold = isCompare
       ? showTimeOrNot(before, model.sentAt.millisecondsSinceEpoch)
       : null;
@@ -282,15 +284,22 @@ Widget designMessage(
       Builder(
         builder: (context) {
           final myId = AuthSession.tokens?.user?.id?.toString();
-          final otherReadBy = model.readBy.where((u) => u.userId.toString() != myId).toList();
+          final effectiveReadBy = readBy ?? model.readBy;
+          final effectiveReadCount = readCount ?? model.readCount;
+          final otherReadBy = effectiveReadBy.where((u) => u.userId.toString() != myId).toList();
           
           if (otherReadBy.isEmpty) return const SizedBox();
+
+          final isMeInReadBy = effectiveReadBy.any((u) => u.userId.toString() == myId);
+          final totalOtherReaders = isMeInReadBy ? effectiveReadCount - 1 : effectiveReadCount;
+          final visibleCount = otherReadBy.length > 3 ? 3 : otherReadBy.length;
+          final extraCount = totalOtherReaders - visibleCount;
           
           return Row(
             mainAxisAlignment: MainAxisAlignment.end,
             children: [
-              // लুপ চালিয়ে ছোট ছোট Avatar দেখাব
-              ...otherReadBy.map(
+              // লুপ চালিয়ে ছোট ছোট Avatar দেখাব (সর্বোচ্চ ৩টি)
+              ...otherReadBy.take(3).map(
                 (user) => Padding(
                   padding: const EdgeInsets.only(left: 2.0),
                   child: ClipOval(
@@ -312,8 +321,18 @@ Widget designMessage(
                   ),
                 ),
               ),
-              if (otherReadBy.length > 3)
-                Text('+${otherReadBy.length - 3}', style: const TextStyle(fontSize: 10)),
+              if (extraCount > 0)
+                Padding(
+                  padding: const EdgeInsets.only(left: 3.0),
+                  child: Text(
+                    '+$extraCount',
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.grey.shade600,
+                    ),
+                  ),
+                ),
             ],
           );
         }

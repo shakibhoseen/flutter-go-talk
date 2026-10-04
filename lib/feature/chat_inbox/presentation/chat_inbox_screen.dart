@@ -60,28 +60,6 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
   }
 
   void _resendMessage() {}
-  void _updateLiveWatermark(int userId, String messageId, String name, String avatar) {
-    final items = inboxBloc?.cursorPageHolder.items ?? [];
-    bool changed = false;
-    for (final item in items) {
-      final hasUser = item.readBy.any((u) => u.userId == userId);
-      if (item.id == messageId) {
-        if (!hasUser) {
-          final newReadBy = List<ReadReceiptUser>.from(item.readBy);
-          newReadBy.add(ReadReceiptUser(userId: userId, name: name, avatarUrl: avatar));
-          inboxBloc?.upsertLocalItem(item.copyWith(readBy: newReadBy), emitState: false);
-          changed = true;
-        }
-      } else if (hasUser) {
-        final newReadBy = item.readBy.where((u) => u.userId != userId).toList();
-        inboxBloc?.upsertLocalItem(item.copyWith(readBy: newReadBy), emitState: false);
-        changed = true;
-      }
-    }
-    if (changed) {
-      inboxBloc?.emitCurrentLocalData();
-    }
-  }
 
   @override
   void initState() {
@@ -90,6 +68,12 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
       inboxBloc = InboxMessageListCursorBloc(
         conversationId: conversationArgs!.id,
       );
+      _blocSubscription = inboxBloc?.stream.listen((state) {
+        _checkAndSendSeenAck();
+        if (mounted) {
+          setState(() {});
+        }
+      });
       inboxBloc?.execute();
       cursorScrollController = MyCursorScrollController(
         inboxBloc!,
@@ -99,9 +83,6 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
         cursorDataHolder: inboxBloc!.cursorPageHolder,
         isReverse: true,
       );
-      _blocSubscription = inboxBloc?.stream.listen((_) {
-        _checkAndSendSeenAck();
-      });
     }
     _socketSubscription = ChatSocketService.instance.messages.listen(
       _handleSocketEvent,
@@ -132,12 +113,19 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
 
     if (type == 'new_message') {
       final message = ChatMessage.fromJson(json, currentUserId: _myId);
-      inboxBloc?.upsertLocalItem(message);
+      inboxBloc?.upsertLocalItem(message, emitState: false);
       
-      // Auto move the sender's avatar to this new message, because they obviously read it!
+      // Auto move the sender's avatar to this new message
       final senderIdInt = int.tryParse(message.senderId) ?? 0;
       if (senderIdInt > 0) {
-        _updateLiveWatermark(senderIdInt, message.id, message.senderName, message.senderAvatar);
+        inboxBloc?.updateMemberWatermark(
+          userId: senderIdInt,
+          messageId: message.id,
+          name: message.senderName,
+          avatarUrl: message.senderAvatar,
+        );
+      } else {
+        inboxBloc?.emitCurrentLocalData();
       }
 
       if (!message.isMine) {
@@ -170,6 +158,19 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
         if (changed) {
           inboxBloc?.emitCurrentLocalData();
         }
+      }
+    } else if (type == 'member_read_watermark') {
+      final userId = json['user_id'] as int? ?? 0;
+      final msgId = json['last_read_message_id']?.toString() ?? '';
+      final name = json['user_name'] as String? ?? '';
+      final avatar = json['user_avatar'] as String? ?? '';
+      if (userId > 0 && msgId.isNotEmpty) {
+        inboxBloc?.updateMemberWatermark(
+          userId: userId,
+          messageId: msgId,
+          name: name,
+          avatarUrl: avatar,
+        );
       }
     }
   }
@@ -396,7 +397,9 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
                           true,  // todayIndicator
                           isGroup ? !newModel.isMine : false, // showSenderName (top message shows name only in groups)
                           showProfile,
-                          isGroup
+                          isGroup,
+                          readBy: inboxBloc?.getWatermarkUsers(newModel.id),
+                          readCount: inboxBloc?.getWatermarkCount(newModel.id),
                         );
                       }
 
@@ -431,7 +434,9 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
                         todayIndicator,
                         showSenderName,
                         showProfile,
-                        isGroup
+                        isGroup,
+                        readBy: inboxBloc?.getWatermarkUsers(newModel.id),
+                        readCount: inboxBloc?.getWatermarkCount(newModel.id),
                       );
                     },
                   ),

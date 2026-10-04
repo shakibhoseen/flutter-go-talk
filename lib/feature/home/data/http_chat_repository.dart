@@ -82,12 +82,17 @@ class HttpChatRepository implements ChatRepository {
             ? nextBeforeId.toString()
             : null;
 
+    final watermarks = responseMap?['watermarks'];
+
     return CursorPaginationResponse(
       current: beforeId,
       data: messages,
       fromJsonFactory: ChatMessage.fromJson,
       toJsonFactory: (model) => model.toJson(),
       nextCursor: nextCursorStr,
+      extra: {
+        if (watermarks is Map) 'watermarks': watermarks,
+      },
     );
   }
 

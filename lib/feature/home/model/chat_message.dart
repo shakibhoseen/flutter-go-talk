@@ -97,6 +97,7 @@ class ChatMessage extends BaseModel {
     bool? isSeen,
     bool? isDelivered,
     List<ReadReceiptUser>? readBy,
+    int? readCount,
   }) {
     return ChatMessage(
       id: id,
@@ -112,7 +113,7 @@ class ChatMessage extends BaseModel {
       senderName: senderName,
       senderAvatar: senderAvatar,
       readBy: readBy ?? this.readBy,
-      readCount: readCount,
+      readCount: readCount ?? this.readCount,
     );
   }
 
