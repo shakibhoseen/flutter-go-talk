@@ -67,6 +67,7 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
     if (conversationArgs?.id != null) {
       inboxBloc = InboxMessageListCursorBloc(
         conversationId: conversationArgs!.id,
+        isGroup: conversationArgs?.isGroup == true,
       );
       _blocSubscription = inboxBloc?.stream.listen((state) {
         _checkAndSendSeenAck();

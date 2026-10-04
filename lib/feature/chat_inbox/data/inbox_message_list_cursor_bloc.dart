@@ -3,6 +3,7 @@ import 'package:whatsapp_flutter_go/core/state/common_base_bloc.dart';
 import 'package:whatsapp_flutter_go/core/state/cursor/cursor_pagination_response.dart';
 import 'package:whatsapp_flutter_go/core/state/cursor/local_sync_cursor_pagination_bloc.dart';
 
+import '../../../core/session/auth_session.dart';
 import '../../home/data/http_chat_repository.dart';
 import '../../home/model/chat_message.dart';
 
@@ -11,9 +12,12 @@ class InboxMessageListCursorBloc
   final repository = HttpChatRepository();
   final pageSize = 20;
   final String conversationId;
+  final bool isGroup;
 
-  InboxMessageListCursorBloc({required this.conversationId})
-    : super(InitialState());
+  InboxMessageListCursorBloc({
+    required this.conversationId,
+    this.isGroup = false,
+  }) : super(InitialState());
 
   @override
   String itemIdentity(ChatMessage item) => item.id;
@@ -127,15 +131,27 @@ class InboxMessageListCursorBloc
       }
     }
 
-    // Phase 2: Assign users exclusively to their latest message
+    // Phase 2: Assign users exclusively to their latest message & compute tick statuses
     final updatedList = <ChatMessage>[];
     bool hasChanges = false;
+
+    // Find the highest message ID seen by anyone other than me
+    int maxOtherSeenMsgId = 0;
+    final myIdInt = int.tryParse(AuthSession.tokens?.user?.id?.toString() ?? '') ?? 0;
+    userLastMessageSeenID.forEach((userId, targetMsgId) {
+      if (userId != myIdInt) {
+        final idInt = int.tryParse(targetMsgId) ?? 0;
+        if (idInt > maxOtherSeenMsgId) {
+          maxOtherSeenMsgId = idInt;
+        }
+      }
+    });
 
     for (final msg in items) {
       final activeReaders = <ReadReceiptUser>[];
 
       userLastMessageSeenID.forEach((userId, targetMsgId) {
-        if (targetMsgId == msg.id) {
+        if (targetMsgId == msg.id && userId.toString() != msg.senderId) {
           final profile = userProfiles[userId] ??
               ReadReceiptUser(
                 userId: userId,
@@ -146,14 +162,25 @@ class InboxMessageListCursorBloc
         }
       });
 
+      final currentMsgId = int.tryParse(msg.id) ?? 0;
+      final computedSeen = msg.isMine && currentMsgId > 0 && maxOtherSeenMsgId > 0 && currentMsgId <= maxOtherSeenMsgId;
+      final computedDelivered = msg.isMine && (isGroup || msg.isDelivered || computedSeen);
+
+      final finalSeen = msg.isSeen || computedSeen;
+      final finalDelivered = msg.isDelivered || computedDelivered || finalSeen;
+
       final hasDiff = activeReaders.length != msg.readBy.length ||
-          !activeReaders.every((a) => msg.readBy.any((b) => b.userId == a.userId));
+          !activeReaders.every((a) => msg.readBy.any((b) => b.userId == a.userId)) ||
+          msg.isSeen != finalSeen ||
+          msg.isDelivered != finalDelivered;
 
       if (hasDiff) {
         hasChanges = true;
         updatedList.add(msg.copyWith(
           readBy: activeReaders,
           readCount: activeReaders.length,
+          isSeen: finalSeen,
+          isDelivered: finalDelivered,
         ));
       } else {
         updatedList.add(msg);
