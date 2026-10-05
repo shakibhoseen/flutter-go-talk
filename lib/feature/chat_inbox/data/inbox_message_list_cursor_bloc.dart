@@ -36,13 +36,16 @@ class InboxMessageListCursorBloc
     return Left(response);
   }
 
-  final Map<int, String> userLastMessageSeenID = {};
+  final Map<int, int> userLastMessageSeenID = {};
   final Map<int, ReadReceiptUser> userProfiles = {};
 
   void execute({bool? pageFromStart}) {
-    add(FetchDataWithQueryEvent(
+    add(
+      FetchDataWithQueryEvent(
         query: {},
-        clearPageWithNewData: pageFromStart ?? false));
+        clearPageWithNewData: pageFromStart ?? false,
+      ),
+    );
   }
 
   @override
@@ -51,151 +54,255 @@ class InboxMessageListCursorBloc
   ) {
     super.doActionBeforeEmitSuccessWithPaginationState(state);
 
-    final extraWatermarks = state.data.extra?['watermarks'];
-    if (extraWatermarks is Map) {
-      extraWatermarks.forEach((msgId, data) {
-        if (data is Map) {
-          final usersList = (data['users'] as List<dynamic>?)
-              ?.map((e) => ReadReceiptUser.fromJson(Map<String, dynamic>.from(e)))
-              .toList() ?? [];
-          final msgIdStr = msgId.toString();
-          for (final u in usersList) {
-            userProfiles[u.userId] = u;
-            userLastMessageSeenID.putIfAbsent(u.userId, () => msgIdStr);
-          }
-        }
-      });
-    }
+    extractWaterMark(state.data.extra?['watermarks']);
 
-    _applyLatestWatermarkResolution(emitState: false);
+    _applyLatestWatermarkResolution(
+      messages: cursorPageHolder.items,
+      emitState: false,
+    );
   }
 
+
+  void extractWaterMark(dynamic watermarks) {
+    if (watermarks is! Map) {
+      return;
+    }
+
+    for (final entry in watermarks.entries) {
+      final messageId = int.tryParse(entry.key.toString());
+
+      if (messageId == null || messageId <= 0) {
+        continue;
+      }
+
+      final watermarkData = entry.value;
+
+      if (watermarkData is! Map) {
+        continue;
+      }
+
+      final users = watermarkData['users'];
+
+      if (users is! List) {
+        continue;
+      }
+
+      for (final user in users) {
+        if (user is! Map) {
+          continue;
+        }
+
+        final profile = ReadReceiptUser.fromJson(
+          Map<String, dynamic>.from(user),
+        );
+
+        updateMemberWatermark(
+          userId: profile.userId,
+          messageId: messageId,
+          profile: profile,
+        );
+      }
+    }
+  }
+
+  /// Updates one user's watermark.
+  ///
+  /// A watermark can only move forward:
+  ///
+  /// 135 -> 140  ✅
+  /// 140 -> 135  ❌
   void updateMemberWatermark({
     required int userId,
-    required String messageId,
-    String name = '',
-    String avatarUrl = '',
+    required int messageId,
+    ReadReceiptUser? profile,
   }) {
-    if (userId <= 0 || messageId.isEmpty) return;
-
-    if (name.isNotEmpty || avatarUrl.isNotEmpty) {
-      userProfiles[userId] = ReadReceiptUser(
-        userId: userId,
-        name: name,
-        avatarUrl: avatarUrl,
-      );
+    if (messageId <= 0) {
+      return;
     }
 
-    userLastMessageSeenID[userId] = messageId;
-    _applyLatestWatermarkResolution(emitState: true);
+    final oldMessageId = userLastMessageSeenID[userId] ?? 0;
+
+    if (messageId > oldMessageId) {
+      userLastMessageSeenID[userId] = messageId;
+    }
+
+    if (profile != null) {
+      userProfiles[userId] = profile;
+    }
   }
 
-  List<ReadReceiptUser> getWatermarkUsers(String messageId) {
-    final list = <ReadReceiptUser>[];
-    userLastMessageSeenID.forEach((userId, targetMsgId) {
-      if (targetMsgId == messageId) {
-        final profile = userProfiles[userId];
-        if (profile != null) list.add(profile);
+  // ---------------------------------------------------------------------------
+  // Seen calculation
+  // ---------------------------------------------------------------------------
+
+  /// Highest message ID seen by any user other than the current user.
+  ///
+  /// Example:
+  ///
+  /// Me -> 138
+  /// B  -> 135
+  /// C  -> 125
+  ///
+  /// returns 135.
+  int get maxOtherSeenMessageId {
+    final currentUserId =
+        int.tryParse(AuthSession.tokens?.user?.id?.toString() ?? '') ?? 0;
+
+    var maxSeenId = 0;
+
+    for (final entry in userLastMessageSeenID.entries) {
+      if (entry.key == currentUserId) {
+        continue;
       }
-    });
-    return list;
+
+      if (entry.value > maxSeenId) {
+        maxSeenId = entry.value;
+      }
+    }
+
+    return maxSeenId;
+  }
+
+
+
+  void _applyLatestWatermarkResolution({
+    required List<ChatMessage> messages,
+    bool emitState = false,
+  }) {
+    final maxOtherSeenId = maxOtherSeenMessageId;
+
+    final updatedMessages = messages.map((message) {
+      if (!message.isMine) {
+        return message;
+      }
+
+      final messageId = int.tryParse(message.id);
+
+      if (messageId == null) {
+        return message;
+      }
+
+      final computedSeen =
+          maxOtherSeenId > 0 && messageId <= maxOtherSeenId;
+
+      final finalSeen = message.isSeen || computedSeen;
+
+      final finalDelivered =
+          message.isDelivered || finalSeen;
+
+      if (message.isSeen == finalSeen &&
+          message.isDelivered == finalDelivered) {
+        return message;
+      }
+
+      return message.copyWith(
+        isSeen: finalSeen,
+        isDelivered: finalDelivered,
+      );
+    }).toList();
+
+    replaceLocalItems(
+      updatedMessages,
+      emitState: emitState,
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Read-receipt profile bubbles
+  // ---------------------------------------------------------------------------
+
+  /// Returns users whose exact watermark is this message.
+  ///
+  /// Example:
+  ///
+  /// B -> 135
+  /// C -> 125
+  ///
+  /// getWatermarkUsers("135") -> [B]
+  /// getWatermarkUsers("134") -> []
+  List<ReadReceiptUser> getWatermarkUsers(String messageId) {
+    final targetMessageId = int.tryParse(messageId);
+
+    if (targetMessageId == null) {
+      return [];
+    }
+
+    final users = <ReadReceiptUser>[];
+
+    for (final entry in userLastMessageSeenID.entries) {
+      if (entry.value != targetMessageId) {
+        continue;
+      }
+
+      final profile = userProfiles[entry.key];
+
+      if (profile != null) {
+        users.add(profile);
+      }
+    }
+
+    return users;
   }
 
   int getWatermarkCount(String messageId) {
-    int count = 0;
-    userLastMessageSeenID.forEach((userId, targetMsgId) {
-      if (targetMsgId == messageId) count++;
-    });
-    return count;
+    return getWatermarkUsers(messageId).length;
   }
 
-  void _applyLatestWatermarkResolution({bool emitState = false}) {
-    final items = List<ChatMessage>.from(cursorPageHolder.items);
-    if (items.isEmpty) return;
+  // ---------------------------------------------------------------------------
+  // WebSocket watermark event
+  // ---------------------------------------------------------------------------
 
-    // Phase 1: Newest (index 0) to oldest scan - register senders
-    for (final msg in items) {
-      final senderId = int.tryParse(msg.senderId) ?? 0;
-      if (senderId > 0) {
-        if (msg.senderName.isNotEmpty || msg.senderAvatar.isNotEmpty) {
-          userProfiles.putIfAbsent(
-            senderId,
-            () => ReadReceiptUser(
-              userId: senderId,
-              name: msg.senderName,
-              avatarUrl: msg.senderAvatar,
-            ),
-          );
-        }
-        userLastMessageSeenID.putIfAbsent(senderId, () => msg.id);
-      }
-    }
+  void handleMemberWatermark({
+    required int userId,
+    required int messageId,
+    ReadReceiptUser? profile,
+  }) {
+    updateMemberWatermark(
+      userId: userId,
+      messageId: messageId,
+      profile: profile,
+    );
 
-    // Phase 2: Assign users exclusively to their latest message & compute tick statuses
-    final updatedList = <ChatMessage>[];
-    bool hasChanges = false;
-
-    // Find the highest message ID seen by anyone other than me
-    int maxOtherSeenMsgId = 0;
-    final myIdInt = int.tryParse(AuthSession.tokens?.user?.id?.toString() ?? '') ?? 0;
-    userLastMessageSeenID.forEach((userId, targetMsgId) {
-      if (userId != myIdInt) {
-        final idInt = int.tryParse(targetMsgId) ?? 0;
-        if (idInt > maxOtherSeenMsgId) {
-          maxOtherSeenMsgId = idInt;
-        }
-      }
-    });
-
-    for (final msg in items) {
-      final activeReaders = <ReadReceiptUser>[];
-
-      userLastMessageSeenID.forEach((userId, targetMsgId) {
-        if (targetMsgId == msg.id && userId.toString() != msg.senderId) {
-          final profile = userProfiles[userId] ??
-              ReadReceiptUser(
-                userId: userId,
-                name: '',
-                avatarUrl: '',
-              );
-          activeReaders.add(profile);
-        }
-      });
-
-      final currentMsgId = int.tryParse(msg.id) ?? 0;
-      final computedSeen = msg.isMine && currentMsgId > 0 && maxOtherSeenMsgId > 0 && currentMsgId <= maxOtherSeenMsgId;
-      final computedDelivered = msg.isMine && (isGroup || msg.isDelivered || computedSeen);
-
-      final finalSeen = msg.isSeen || computedSeen;
-      final finalDelivered = msg.isDelivered || computedDelivered || finalSeen;
-
-      final hasDiff = activeReaders.length != msg.readBy.length ||
-          !activeReaders.every((a) => msg.readBy.any((b) => b.userId == a.userId)) ||
-          msg.isSeen != finalSeen ||
-          msg.isDelivered != finalDelivered;
-
-      if (hasDiff) {
-        hasChanges = true;
-        updatedList.add(msg.copyWith(
-          readBy: activeReaders,
-          readCount: activeReaders.length,
-          isSeen: finalSeen,
-          isDelivered: finalDelivered,
-        ));
-      } else {
-        updatedList.add(msg);
-      }
-    }
-
-    if (hasChanges) {
-      replaceLocalItems(updatedList, emitState: emitState);
-    }
+    // Unlike pagination, WebSocket has no outer pagination success state
+    // that will emit this change for us.
+    _applyLatestWatermarkResolution(
+      messages: cursorPageHolder.items,
+      emitState: true,
+    );
   }
+
+  // ---------------------------------------------------------------------------
+  // Clear
+  // ---------------------------------------------------------------------------
 
   @override
   void clearLocalItems({bool resetPaginationState = false}) {
     userLastMessageSeenID.clear();
     userProfiles.clear();
     super.clearLocalItems(resetPaginationState: resetPaginationState);
+  }
+
+
+  void handleNewMessage({
+    required ChatMessage message,
+    ReadReceiptUser? profile,
+  }) {
+    upsertLocalItem(message, emitState: false);
+
+    final senderId = int.tryParse(message.senderId) ?? 0;
+    final messageId = int.tryParse(message.id) ?? 0;
+
+    if (senderId > 0 && messageId > 0) {
+      updateMemberWatermark(
+        userId: senderId,
+        messageId: messageId,
+        profile: profile,
+      );
+    }
+
+    _applyLatestWatermarkResolution(
+      messages: cursorPageHolder.items,
+      emitState: true,
+    );
   }
 }

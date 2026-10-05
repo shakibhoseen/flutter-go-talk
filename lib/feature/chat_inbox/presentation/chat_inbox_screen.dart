@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer';
 
 import 'package:flutter/material.dart';
 import 'package:whatsapp_flutter_go/core/config/app_flavor_config.dart';
@@ -10,10 +11,12 @@ import 'package:whatsapp_flutter_go/feature/chat_inbox/presentation/widgets/mess
 import 'package:whatsapp_flutter_go/feature/home/model/chat_message.dart';
 
 import '../../../core/controllers/my_scroll_controller.dart';
+import '../../../core/db/network/socket/chat_socket_event_dispatcher.dart';
+import '../../../core/db/network/socket/chat_socket_event_type.dart';
 import '../../../core/db/network/socket/chat_socket_service.dart';
 import '../../../core/session/auth_session.dart';
 import '../../../gen/assets.gen.dart';
-import '../../home/data/socket_event.dart';
+import '../../../core/db/network/socket/socket_event.dart';
 import '../../home/model/conversation.dart';
 import '../../call/presentation/call_screen.dart';
 import '../../call/data/service/call_permission_service.dart';
@@ -29,12 +32,17 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
   InboxMessageListCursorBloc? inboxBloc;
   final _controller = TextEditingController();
   Conversation? conversationArgs;
-  StreamSubscription<dynamic>? _socketSubscription;
+  final _socketDispatcher =
+      ChatSocketEventDispatcher.instance;
 
   String? get _myId => AuthSession.tokens?.user?.id?.toString();
   MyCursorScrollController? cursorScrollController;
   StreamSubscription<dynamic>? _blocSubscription;
   String? _lastAckedMessageId;
+
+  VoidCallback? _removeNewMessageListener;
+  VoidCallback? _removeStatusUpdatedListener;
+  VoidCallback? _removeWatermarkListener;
 
   String _getFullUrl(String? path) {
     if (path == null || path.isEmpty) return '';
@@ -84,12 +92,146 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
         cursorDataHolder: inboxBloc!.cursorPageHolder,
         isReverse: true,
       );
+      _listenToSocketEvents();
+
     }
-    _socketSubscription = ChatSocketService.instance.messages.listen(
-      _handleSocketEvent,
-    );
 
     super.initState();
+  }
+
+  void _listenToSocketEvents() {
+    final conversationId = conversationArgs?.id;
+
+    if (conversationId == null) return;
+
+    _removeNewMessageListener = _socketDispatcher.listen(
+      eventType: ChatSocketEventType.newMessage,
+      conversationId: conversationId,
+      callback: _handleNewMessage,
+    );
+
+    _removeStatusUpdatedListener = _socketDispatcher.listen(
+      eventType: ChatSocketEventType.statusUpdated,
+      conversationId: conversationId,
+      callback: _handleStatusUpdated,
+    );
+
+    _removeWatermarkListener = _socketDispatcher.listen(
+      eventType: ChatSocketEventType.memberReadWatermark,
+      conversationId: conversationId,
+      callback: _handleMemberReadWatermark,
+    );
+  }
+
+  void _handleNewMessage(Map<String, dynamic> json) {
+    log(
+      'new message: $json',
+      name: 'ChatInboxScreen',
+    );
+
+    final message = ChatMessage.fromJson(
+      json,
+      currentUserId: _myId,
+    );
+
+    final senderId = int.tryParse(message.senderId) ?? 0;
+
+    final hasProfile =
+        inboxBloc?.userProfiles.containsKey(senderId) ?? false;
+
+    inboxBloc?.handleNewMessage(
+      message: message,
+      profile: senderId > 0 && !hasProfile
+          ? ReadReceiptUser(
+        userId: senderId,
+        name: message.senderName,
+        avatarUrl: message.senderAvatar,
+      )
+          : null,
+    );
+
+    if (!message.isMine) {
+      _checkAndSendSeenAck();
+    }
+  }
+
+  void _handleStatusUpdated(Map<String, dynamic> json) {
+    final statusMessageId =
+        json['message_id']?.toString() ??
+            json['upto_message_id']?.toString();
+
+    final status = json['status'] as String?;
+
+    if (statusMessageId == null) return;
+
+    final targetId = int.tryParse(statusMessageId) ?? 0;
+
+    final isSeenEvent = status == 'seen';
+    final isDeliveredEvent = status == 'delivered';
+
+    if (!isSeenEvent && !isDeliveredEvent) return;
+
+    final items =
+        inboxBloc?.cursorPageHolder.items ?? [];
+
+    var changed = false;
+
+    for (final item in items) {
+      if (!item.isMine) continue;
+
+      final currentId = int.tryParse(item.id) ?? 0;
+
+      if (currentId > targetId) continue;
+
+      if (isSeenEvent && !item.isSeen) {
+        inboxBloc?.upsertLocalItem(
+          item.copyWith(
+            isSeen: true,
+            isDelivered: true,
+          ),
+          emitState: false,
+        );
+
+        changed = true;
+      } else if (
+      isDeliveredEvent &&
+          !item.isDelivered &&
+          !item.isSeen
+      ) {
+        inboxBloc?.upsertLocalItem(
+          item.copyWith(
+            isDelivered: true,
+          ),
+          emitState: false,
+        );
+
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      inboxBloc?.emitCurrentLocalData();
+    }
+  }
+
+  void _handleMemberReadWatermark(
+      Map<String, dynamic> json,
+      ) {
+    final userId = int.tryParse(
+      json['user_id']?.toString() ?? '',
+    );
+
+    final messageId = int.tryParse(
+      json['last_read_message_id']?.toString() ?? '',
+    );
+
+    if (userId == null || userId <= 0) return;
+    if (messageId == null || messageId <= 0) return;
+
+    inboxBloc?.handleMemberWatermark(
+      userId: userId,
+      messageId: messageId,
+    );
   }
 
   void _send() {
@@ -102,84 +244,15 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
     _controller.clear();
   }
 
-  void _handleSocketEvent(dynamic raw) {
-    final event = decodeSocketEvent(raw);
-    if (event == null) return;
 
-    final type = event['type'];
-    final payload = event['payload'];
-    if (payload is! Map) return;
-    final json = Map<String, dynamic>.from(payload);
-    if (json['conversation_id']?.toString() != conversationArgs?.id) return;
-
-    if (type == 'new_message') {
-      final message = ChatMessage.fromJson(json, currentUserId: _myId);
-      inboxBloc?.upsertLocalItem(message, emitState: false);
-      
-      // Auto move the sender's avatar to this new message
-      final senderIdInt = int.tryParse(message.senderId) ?? 0;
-      if (senderIdInt > 0) {
-        inboxBloc?.updateMemberWatermark(
-          userId: senderIdInt,
-          messageId: message.id,
-          name: message.senderName,
-          avatarUrl: message.senderAvatar,
-        );
-      } else {
-        inboxBloc?.emitCurrentLocalData();
-      }
-
-      if (!message.isMine) {
-        _checkAndSendSeenAck();
-      }
-    } else if (type == 'ack_seen' || type == 'message_seen' || type == 'status_updated') {
-      final statusMessageId = json['message_id']?.toString() ?? json['upto_message_id']?.toString();
-      final status = json['status'] as String?;
-      if (statusMessageId != null) {
-        final items = inboxBloc?.cursorPageHolder.items ?? [];
-        bool changed = false;
-        bool isSeenEvent = type == 'ack_seen' || type == 'message_seen' || status == 'seen';
-        bool isDeliveredEvent = status == 'delivered';
-
-        final targetId = int.tryParse(statusMessageId) ?? 0;
-        for (final item in items) {
-          if (item.isMine) {
-            final currentId = int.tryParse(item.id) ?? 0;
-            if (currentId <= targetId) {
-              if (isSeenEvent && !item.isSeen) {
-                inboxBloc?.upsertLocalItem(item.copyWith(isSeen: true, isDelivered: true), emitState: false);
-                changed = true;
-              } else if (isDeliveredEvent && !item.isDelivered && !item.isSeen) {
-                inboxBloc?.upsertLocalItem(item.copyWith(isDelivered: true), emitState: false);
-                changed = true;
-              }
-            }
-          }
-        }
-        if (changed) {
-          inboxBloc?.emitCurrentLocalData();
-        }
-      }
-    } else if (type == 'member_read_watermark') {
-      final userId = json['user_id'] as int? ?? 0;
-      final msgId = json['last_read_message_id']?.toString() ?? '';
-      final name = json['user_name'] as String? ?? '';
-      final avatar = json['user_avatar'] as String? ?? '';
-      if (userId > 0 && msgId.isNotEmpty) {
-        inboxBloc?.updateMemberWatermark(
-          userId: userId,
-          messageId: msgId,
-          name: name,
-          avatarUrl: avatar,
-        );
-      }
-    }
-  }
 
   @override
   void dispose() {
+    _removeNewMessageListener?.call();
+    _removeStatusUpdatedListener?.call();
+    _removeWatermarkListener?.call();
+
     _blocSubscription?.cancel();
-    _socketSubscription?.cancel();
     _controller.dispose();
     super.dispose();
   }
@@ -194,11 +267,15 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
           children: [
             CircleAvatar(
               radius: 18,
-              backgroundImage: conversationArgs?.avatarUrl != null 
-                  ? NetworkImage(_getFullUrl(conversationArgs!.avatarUrl)) 
+              backgroundImage: conversationArgs?.avatarUrl != null
+                  ? NetworkImage(_getFullUrl(conversationArgs!.avatarUrl))
                   : null,
-              child: conversationArgs?.avatarUrl == null 
-                  ? Icon(conversationArgs?.isGroup == true ? Icons.groups : Icons.person) 
+              child: conversationArgs?.avatarUrl == null
+                  ? Icon(
+                      conversationArgs?.isGroup == true
+                          ? Icons.groups
+                          : Icons.person,
+                    )
                   : null,
             ),
             const SizedBox(width: 10),
@@ -219,9 +296,8 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
                   Navigator.push(
                     context,
                     MaterialPageRoute(
-                      builder: (context) => GroupInfoScreen(
-                        conversation: conversationArgs!,
-                      ),
+                      builder: (context) =>
+                          GroupInfoScreen(conversation: conversationArgs!),
                     ),
                   );
                 }
@@ -237,7 +313,8 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
             PopupMenuButton<String>(
               onSelected: (value) async {
                 final isVideo = value == 'video_call';
-                final hasPermission = await CallPermissionService.instance.requestPermissions(isVideo: isVideo);
+                final hasPermission = await CallPermissionService.instance
+                    .requestPermissions(isVideo: isVideo);
                 if (!hasPermission) {
                   if (context.mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
@@ -249,7 +326,8 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
                         ),
                         action: SnackBarAction(
                           label: 'Settings',
-                          onPressed: () => CallPermissionService.instance.openSettings(),
+                          onPressed: () =>
+                              CallPermissionService.instance.openSettings(),
                         ),
                       ),
                     );
@@ -286,7 +364,9 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
                 } else if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
-                      content: Text('Cannot initiate call: recipient ID not found'),
+                      content: Text(
+                        'Cannot initiate call: recipient ID not found',
+                      ),
                     ),
                   );
                 }
@@ -335,39 +415,22 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
                 // Chronological cascade: iterates NEWEST (index 0) -> OLDEST (index N).
                 // Rule: If a newer message is seen, all older messages must also be seen.
                 // Rule: If a newer message is delivered, all older messages must also be delivered.
-                bool seenCascade = false;
-                bool deliveredCascade = false;
-                final cascadedData = <ChatMessage>[];
-                for (final m in data) {
-                  if (m.isMine) {
-                    if (m.isSeen) seenCascade = true;
-                    if (m.isDelivered) deliveredCascade = true;
-
-                    if (seenCascade && !m.isSeen) {
-                      cascadedData.add(m.copyWith(isSeen: true, isDelivered: true));
-                    } else if (deliveredCascade && !m.isDelivered && !m.isSeen) {
-                      cascadedData.add(m.copyWith(isDelivered: true));
-                    } else {
-                      cascadedData.add(m);
-                    }
-                  } else {
-                    cascadedData.add(m);
-                  }
-                }
 
                 return Expanded(
                   child: ListView.builder(
                     reverse: true,
                     padding: const EdgeInsets.only(bottom: 8),
                     controller: cursorScrollController?.controller,
-                    itemCount: cascadedData.length,
+                    itemCount: data.length,
                     itemBuilder: (context, index) {
-                      final newModel = cascadedData.elementAt(index);
+                      final newModel = data.elementAt(index);
                       final isGroup = conversationArgs?.isGroup == true;
 
                       // Newer message (the one below this message on the screen)
-                      final newerModel = index > 0 ? cascadedData.elementAt(index - 1) : null;
-                      
+                      final newerModel = index > 0
+                          ? data.elementAt(index - 1)
+                          : null;
+
                       // Profile visibility logic (only applicable for group chats)
                       bool showProfile = false;
                       if (isGroup && !newModel.isMine) {
@@ -380,8 +443,10 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
                         } else {
                           // Same sender below. Check time gap.
                           // If gap is medium or big (>= 10 minutes), show profile here too.
-                          final gap = (newModel.sentAt.millisecondsSinceEpoch - 
-                                       newerModel.sentAt.millisecondsSinceEpoch).abs();
+                          final gap =
+                              (newModel.sentAt.millisecondsSinceEpoch -
+                                      newerModel.sentAt.millisecondsSinceEpoch)
+                                  .abs();
                           if (gap >= 600000) {
                             showProfile = true;
                           }
@@ -389,14 +454,18 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
                       }
 
                       // Oldest message edge case
-                      if (index + 1 == cascadedData.length) {
+                      if (index + 1 == data.length) {
                         return designMessage(
                           newModel,
                           _resendMessage,
-                          false, // isCompare
-                          0,     // before (time)
-                          true,  // todayIndicator
-                          isGroup ? !newModel.isMine : false, // showSenderName (top message shows name only in groups)
+                          false,
+                          // isCompare
+                          0,
+                          // before (time)
+                          true,
+                          // todayIndicator
+                          isGroup ? !newModel.isMine : false,
+                          // showSenderName (top message shows name only in groups)
                           showProfile,
                           isGroup,
                           readBy: inboxBloc?.getWatermarkUsers(newModel.id),
@@ -405,32 +474,37 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
                       }
 
                       // Older message (the one above this message on the screen)
-                      final oldModel = cascadedData.elementAt(index + 1);
+                      final oldModel = data.elementAt(index + 1);
 
                       bool todayIndicator = false;
                       bool showSenderName = false;
-                      
+
                       if (isGroup && !newModel.isMine) {
                         if (oldModel.senderId != newModel.senderId) {
                           showSenderName = true;
                         } else {
                           // Same sender, but check if there's a large time gap
-                          final gap = (oldModel.sentAt.millisecondsSinceEpoch - 
-                                       newModel.sentAt.millisecondsSinceEpoch).abs();
-                          if (gap >= 600000) { // 10 minutes
+                          final gap =
+                              (oldModel.sentAt.millisecondsSinceEpoch -
+                                      newModel.sentAt.millisecondsSinceEpoch)
+                                  .abs();
+                          if (gap >= 600000) {
+                            // 10 minutes
                             showSenderName = true;
                           }
                         }
                       }
 
-                      if (oldModel.timeStamp?.dateCompare != newModel.timeStamp?.dateCompare) {
+                      if (oldModel.timeStamp?.dateCompare !=
+                          newModel.timeStamp?.dateCompare) {
                         todayIndicator = true;
                       }
 
                       return designMessage(
                         newModel,
                         _resendMessage,
-                        true, // isCompare
+                        true,
+                        // isCompare
                         oldModel.sentAt.millisecondsSinceEpoch,
                         todayIndicator,
                         showSenderName,

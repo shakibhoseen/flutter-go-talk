@@ -206,7 +206,7 @@ Widget designMessage(
                 ),
                 decoration: BoxDecoration(
                   color: model.isMine
-                      ? Colors.green.shade400
+                      ? Colors.grey.shade100
                       : Colors.grey.shade100,
 
                   borderRadius: BorderRadius.only(
@@ -245,11 +245,11 @@ Widget designMessage(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             model.isMine
-                                ? (model.isSeen
+                                ? model.isSeen
                                     ? Icon(
                                         FontAwesomeIcons.checkDouble.data,
                                         size: 12,
-                                        color: Colors.green,
+                                        color: Colors.red,
                                       )
                                     : (model.isDelivered
                                         ? Icon(
@@ -261,7 +261,7 @@ Widget designMessage(
                                             FontAwesomeIcons.check.data,
                                             size: 12,
                                             color: Colors.grey,
-                                          )))
+                                          ))
                                 : Container(),
                             Text(
                               '${model.timeStamp?.hourMinute}',

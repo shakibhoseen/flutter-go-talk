@@ -7,7 +7,7 @@ import 'package:whatsapp_flutter_go/core/session/auth_session.dart';
 import '../../../gen/assets.gen.dart';
 import '../data/chat_repository.dart';
 import '../data/http_chat_repository.dart';
-import '../data/socket_event.dart';
+import '../../../core/db/network/socket/socket_event.dart';
 import '../model/chat_message.dart';
 import '../model/conversation.dart';
 
@@ -55,8 +55,16 @@ class _ChatThreadPageState extends State<ChatThreadPage> {
     _load();
     _scrollController.addListener(_onScroll);
     _socketSubscription = ChatSocketService.instance.messages.listen(
-      _handleSocketEvent,
+      _handleMultipleRaw,
     );
+  }
+
+  void _handleMultipleRaw(dynamic raw) {
+    final events = decodeSocketEvents(raw);
+
+    for (final event in events) {
+      _handleSocketEvent(event);
+    }
   }
 
   Future<void> _load() async {
@@ -68,8 +76,8 @@ class _ChatThreadPageState extends State<ChatThreadPage> {
     setState(() {
       _messages
         ..clear()
-        ..addAll(messages.data??[]);
-      _hasMore = (messages.data??[]).length >= widget.pageSize;
+        ..addAll(messages.data ?? []);
+      _hasMore = (messages.data ?? []).length >= widget.pageSize;
       _loading = false;
     });
   }
@@ -93,7 +101,7 @@ class _ChatThreadPageState extends State<ChatThreadPage> {
       limit: widget.pageSize,
       beforeId: _messages.first.id,
     );
-    final older = cursor.data??[];
+    final older = cursor.data ?? [];
     if (!mounted) return;
     setState(() {
       _messages.insertAll(0, older);
@@ -102,9 +110,8 @@ class _ChatThreadPageState extends State<ChatThreadPage> {
     });
   }
 
-  void _handleSocketEvent(dynamic raw) {
-    final event = decodeSocketEvent(raw);
-    if (event == null || event['type'] != 'new_message') return;
+  void _handleSocketEvent(Map<String, dynamic> event) {
+    if (event['type'] != 'new_message') return;
 
     final payload = event['payload'];
     if (payload is! Map) return;
@@ -177,8 +184,7 @@ class _ChatThreadPageState extends State<ChatThreadPage> {
                             ),
                           );
                         }
-                        final message =
-                            _messages[_messages.length - 1 - index];
+                        final message = _messages[_messages.length - 1 - index];
                         return Align(
                           alignment: message.isMine
                               ? Alignment.centerRight
@@ -190,8 +196,7 @@ class _ChatThreadPageState extends State<ChatThreadPage> {
                               vertical: 8,
                             ),
                             constraints: BoxConstraints(
-                              maxWidth:
-                                  MediaQuery.sizeOf(context).width * 0.75,
+                              maxWidth: MediaQuery.sizeOf(context).width * 0.75,
                             ),
                             decoration: BoxDecoration(
                               color: message.isMine
