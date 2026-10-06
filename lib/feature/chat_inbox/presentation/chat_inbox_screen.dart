@@ -92,10 +92,35 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
         isReverse: true,
       );
       _listenToSocketEvents();
-
+      _listenToSocketConnectionState();
     }
 
     super.initState();
+  }
+
+  SocketConnectionState? _lastConnectionState;
+
+  void _listenToSocketConnectionState() {
+    _lastConnectionState = ChatSocketService.instance.connectionState.value;
+    ChatSocketService.instance.connectionState.addListener(_handleSocketStateChange);
+  }
+
+  void _handleSocketStateChange() async {
+    final currentState = ChatSocketService.instance.connectionState.value;
+    final wasDisconnected = _lastConnectionState == SocketConnectionState.reconnecting ||
+        _lastConnectionState == SocketConnectionState.disconnected;
+    _lastConnectionState = currentState;
+
+    if (wasDisconnected && currentState == SocketConnectionState.connected) {
+      log(
+        'Socket reconnected, syncing missed messages for conversation: ${conversationArgs?.id}',
+        name: 'ChatInboxScreen',
+      );
+      final success = await inboxBloc?.syncMissedMessages();
+      if (mounted && success == true) {
+        _checkAndSendSeenAck();
+      }
+    }
   }
 
   void _listenToSocketEvents() {
@@ -264,6 +289,7 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
 
   @override
   void dispose() {
+    ChatSocketService.instance.connectionState.removeListener(_handleSocketStateChange);
     _removeNewMessageListener?.call();
     _removeStatusUpdatedListener?.call();
     _removeWatermarkListener?.call();

@@ -8,6 +8,8 @@ class CursorPaginationResponse<T> {
   int? total;
   Flags? flags;
   Map<String, dynamic>? extra;
+  bool? hasMore;
+  int? nextSinceId;
 
   final T Function(Map<String, dynamic> json) fromJsonFactory;
   final Map<String, dynamic> Function(T model) toJsonFactory;
@@ -20,6 +22,8 @@ class CursorPaginationResponse<T> {
     this.total,
     this.flags,
     this.extra,
+    this.hasMore,
+    this.nextSinceId,
     required this.fromJsonFactory,
     required this.toJsonFactory,
   });
@@ -40,6 +44,12 @@ class CursorPaginationResponse<T> {
     total = json['total'];
     flags = json['flags'] != null ? Flags.fromJson(json['flags']) : null;
     extra = json['extra'] is Map ? Map<String, dynamic>.from(json['extra']) : null;
+    hasMore = json['has_more'] as bool?;
+    nextSinceId = json['next_since_id'] is int
+        ? json['next_since_id'] as int
+        : (json['next_since_id'] != null
+            ? int.tryParse(json['next_since_id'].toString())
+            : null);
   }
 
   Map<String, dynamic> toJson() {
@@ -57,6 +67,12 @@ class CursorPaginationResponse<T> {
     }
     if (extra != null) {
       data['extra'] = extra;
+    }
+    if (hasMore != null) {
+      data['has_more'] = hasMore;
+    }
+    if (nextSinceId != null) {
+      data['next_since_id'] = nextSinceId;
     }
     return data;
   }

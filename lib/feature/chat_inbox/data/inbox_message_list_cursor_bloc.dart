@@ -1,3 +1,5 @@
+import 'dart:developer';
+
 import 'package:either_dart/either.dart';
 import 'package:whatsapp_flutter_go/core/state/common_base_bloc.dart';
 import 'package:whatsapp_flutter_go/core/state/cursor/cursor_pagination_response.dart';
@@ -9,7 +11,7 @@ import '../../home/model/chat_message.dart';
 
 class InboxMessageListCursorBloc
     extends LocalSyncCursorPaginationBloc<ChatMessage> {
-  final repository = HttpChatRepository();
+  final HttpChatRepository repository;
   final pageSize = 20;
   final String conversationId;
   final bool isGroup;
@@ -17,10 +19,70 @@ class InboxMessageListCursorBloc
   InboxMessageListCursorBloc({
     required this.conversationId,
     this.isGroup = false,
-  }) : super(InitialState());
+    HttpChatRepository? repository,
+  })  : repository = repository ?? const HttpChatRepository(),
+        super(InitialState());
 
   @override
   String itemIdentity(ChatMessage item) => item.id;
+
+  @override
+  ChatMessage mergeItem(ChatMessage existing, ChatMessage incoming) {
+    // Monotonic status merge: newer delivery or seen status must never be
+    // downgraded by an older/stale status from another source (HTTP delta vs WebSocket).
+    final mergedSeen = existing.isSeen || incoming.isSeen;
+    final mergedDelivered = existing.isDelivered || incoming.isDelivered || mergedSeen;
+
+    final mergedReadBy = _mergeReadBy(existing.readBy, incoming.readBy);
+    final baseCount = existing.readCount > incoming.readCount
+        ? existing.readCount
+        : incoming.readCount;
+    final mergedReadCount =
+        mergedReadBy.length > baseCount ? mergedReadBy.length : baseCount;
+
+    return incoming.copyWith(
+      isDelivered: mergedDelivered,
+      isSeen: mergedSeen,
+      readCount: mergedReadCount,
+      readBy: mergedReadBy,
+    );
+  }
+
+  /// Merges two readBy user lists, preserving existing ordering and deduplicating by userId.
+  List<ReadReceiptUser> _mergeReadBy(
+    List<ReadReceiptUser> existing,
+    List<ReadReceiptUser> incoming,
+  ) {
+    if (existing.isEmpty) return incoming;
+    if (incoming.isEmpty) return existing;
+
+    final merged = <ReadReceiptUser>[];
+    final userIndexMap = <int, int>{};
+
+    for (final user in existing) {
+      userIndexMap[user.userId] = merged.length;
+      merged.add(user);
+    }
+
+    for (final inc in incoming) {
+      final existingIndex = userIndexMap[inc.userId];
+      if (existingIndex == null) {
+        userIndexMap[inc.userId] = merged.length;
+        merged.add(inc);
+      } else {
+        final current = merged[existingIndex];
+        if ((current.name.isEmpty && inc.name.isNotEmpty) ||
+            (current.avatarUrl.isEmpty && inc.avatarUrl.isNotEmpty)) {
+          merged[existingIndex] = current.copyWith(
+            name: current.name.isNotEmpty ? current.name : inc.name,
+            avatarUrl: current.avatarUrl.isNotEmpty ? current.avatarUrl : inc.avatarUrl,
+          );
+        }
+      }
+    }
+
+    return merged;
+  }
 
   @override
   Future<Either<CursorPaginationResponse<ChatMessage>, String>> handleEvent(
@@ -303,5 +365,121 @@ class InboxMessageListCursorBloc
       messages: cursorPageHolder.items,
       emitState: true,
     );
+  }
+
+  /// Returns the highest message ID currently loaded in memory.
+  int? get latestMessageId {
+    int? maxId;
+    for (final item in cursorPageHolder.items) {
+      final id = int.tryParse(item.id);
+      if (id != null && id > 0) {
+        if (maxId == null || id > maxId) {
+          maxId = id;
+        }
+      }
+    }
+    return maxId;
+  }
+
+  bool _isSyncingMissedMessages = false;
+  bool get isSyncingMissedMessages => _isSyncingMissedMessages;
+
+  /// Recovers all missed messages and watermarks after [latestMessageId] using
+  /// forward delta sync. If the inbox is empty, falls back to normal initial load.
+  /// Returns [true] if the delta sync completed successfully across all pages,
+  /// or [false] if the sync was partial, failed, non-advancing, or could not run.
+  Future<bool> syncMissedMessages() async {
+    if (_isSyncingMissedMessages) {
+      return false;
+    }
+
+    final startSinceId = latestMessageId;
+    if (startSinceId == null) {
+      // If no messages are currently loaded, perform regular initial load
+      execute(pageFromStart: true);
+      return false;
+    }
+
+    _isSyncingMissedMessages = true;
+    try {
+      int? currentSinceId = startSinceId;
+      bool hasMore = true;
+
+      while (hasMore && currentSinceId != null) {
+        final response = await repository.getMessages(
+          conversationId,
+          limit: 50,
+          sinceId: currentSinceId,
+        );
+
+        // 1. Monotonically update watermarks from this page
+        extractWaterMark(response.extra?['watermarks']);
+
+        // 2. Upsert incoming missed messages (deduped via itemIdentity)
+        final incoming = response.data ?? [];
+        if (incoming.isNotEmpty) {
+          for (final msg in incoming) {
+            final senderId = int.tryParse(msg.senderId) ?? 0;
+            if (senderId > 0 &&
+                !userProfiles.containsKey(senderId) &&
+                (msg.senderName.isNotEmpty || msg.senderAvatar.isNotEmpty)) {
+              userProfiles[senderId] = ReadReceiptUser(
+                userId: senderId,
+                name: msg.senderName,
+                avatarUrl: msg.senderAvatar,
+              );
+            }
+            upsertLocalItem(msg, insertAtStart: true, emitState: false);
+          }
+        }
+
+        hasMore = response.hasMore ?? false;
+        final nextId = response.nextSinceId;
+
+        // Break if there is no next cursor or no forward progress to prevent infinite loops
+        if (nextId == null || nextId <= currentSinceId) {
+          if (hasMore) {
+            if (nextId == null) {
+              log(
+                'has_more=true but next_since_id=null from backend delta sync',
+                name: 'InboxMessageListCursorBloc',
+              );
+            } else {
+              log(
+                'has_more=true but next_since_id ($nextId) did not advance beyond current ($currentSinceId)',
+                name: 'InboxMessageListCursorBloc',
+              );
+            }
+            return false;
+          }
+          break;
+        }
+        currentSinceId = nextId;
+      }
+
+      // Ensure local messages remain sorted strictly newest (index 0) -> oldest
+      cursorPageHolder.items.sort((a, b) {
+        final idA = int.tryParse(a.id) ?? 0;
+        final idB = int.tryParse(b.id) ?? 0;
+        return idB.compareTo(idA);
+      });
+
+      // 3. Apply watermarks to all loaded messages and emit state once
+      _applyLatestWatermarkResolution(
+        messages: cursorPageHolder.items,
+        emitState: true,
+      );
+
+      return true;
+    } catch (e, stackTrace) {
+      log(
+        'syncMissedMessages error: $e',
+        name: 'InboxMessageListCursorBloc',
+        stackTrace: stackTrace,
+      );
+      return false;
+    } finally {
+      _isSyncingMissedMessages = false;
+    }
   }
 }

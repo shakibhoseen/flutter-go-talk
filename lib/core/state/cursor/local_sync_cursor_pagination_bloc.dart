@@ -35,6 +35,10 @@ abstract class LocalSyncCursorPaginationBloc<ItemType>
     _storeLocalSnapshot(items: mergedItems, responseSource: response);
   }
 
+  /// Merges an incoming item into an existing item with the same identity.
+  /// Subclasses can override this to preserve monotonic status flags (e.g. delivered, seen).
+  ItemType mergeItem(ItemType existing, ItemType incoming) => incoming;
+
   bool upsertLocalItem(
     ItemType item, {
     bool insertAtStart = true,
@@ -46,7 +50,7 @@ abstract class LocalSyncCursorPaginationBloc<ItemType>
     final index = items.indexWhere((existing) => itemIdentity(existing) == key);
 
     if (index >= 0) {
-      items[index] = item;
+      items[index] = mergeItem(items[index], item);
     } else if (insertAtStart) {
       items.insert(0, item);
       if (incrementTotalOnInsert) {
@@ -153,7 +157,7 @@ abstract class LocalSyncCursorPaginationBloc<ItemType>
         indexByIdentity[identity] = mergedItems.length;
         mergedItems.add(incoming);
       } else {
-        mergedItems[existingIndex] = incoming;
+        mergedItems[existingIndex] = mergeItem(mergedItems[existingIndex], incoming);
       }
     }
 

@@ -50,6 +50,7 @@ class HttpChatRepository implements ChatRepository {
     String conversationId, {
     int limit = 20,
     String? beforeId,
+    int? sinceId,
   }) async {
     final responseMap = _asMap(
       await GlobalDataApi.instance.getResponse(
@@ -57,6 +58,7 @@ class HttpChatRepository implements ChatRepository {
         query: {
           'limit': limit,
           'before_id': ?beforeId,
+          'since_id': ?sinceId,
         },
       ),
     );
@@ -76,6 +78,13 @@ class HttpChatRepository implements ChatRepository {
         : <ChatMessage>[];
 
     final nextBeforeId = responseMap?['next_before_id'];
+    final rawNextSinceId = responseMap?['next_since_id'];
+    final nextSinceId = rawNextSinceId is int
+        ? rawNextSinceId
+        : (rawNextSinceId != null
+            ? int.tryParse(rawNextSinceId.toString())
+            : null);
+
     final hasMore = responseMap?['has_more'] as bool? ?? (nextBeforeId != null);
     final nextCursorStr =
         (hasMore && nextBeforeId != null && nextBeforeId != 0 && nextBeforeId != '0')
@@ -85,13 +94,17 @@ class HttpChatRepository implements ChatRepository {
     final watermarks = responseMap?['watermarks'];
 
     return CursorPaginationResponse(
-      current: beforeId,
+      current: beforeId ?? sinceId?.toString(),
       data: messages,
       fromJsonFactory: ChatMessage.fromJson,
       toJsonFactory: (model) => model.toJson(),
       nextCursor: nextCursorStr,
+      hasMore: hasMore,
+      nextSinceId: nextSinceId,
       extra: {
         if (watermarks is Map) 'watermarks': watermarks,
+        'next_since_id': ?nextSinceId,
+        'has_more': hasMore,
       },
     );
   }

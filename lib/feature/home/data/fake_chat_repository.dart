@@ -131,6 +131,7 @@ class FakeChatRepository implements ChatRepository {
     String conversationId, {
     int limit = 20,
     String? beforeId,
+    int? sinceId,
   }) async {
     await Future.delayed(const Duration(milliseconds: 200));
     // No history beyond the canned first page — pagination has nothing real

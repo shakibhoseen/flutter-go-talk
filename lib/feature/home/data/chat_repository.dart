@@ -11,11 +11,12 @@ abstract class ChatRepository {
   Future<List<ChatUser>> getAllUsers();
 
   /// A page of a conversation's history, oldest-first within the page.
-  /// [beforeId] scrolls further back — the oldest message id already
-  /// loaded, so the server returns the [limit] messages just before it.
+  /// [beforeId] scrolls further back (history).
+  /// [sinceId] fetches newer/missed messages after this id (forward delta sync).
   Future<CursorPaginationResponse<ChatMessage>> getMessages(
     String conversationId, {
     int limit = 20,
     String? beforeId,
+    int? sinceId,
   });
 }
