@@ -10,7 +10,6 @@ import '../../../../core/db/network/socket/socket_event.dart';
 import '../../model/chat_user.dart';
 import '../../model/conversation.dart';
 
-import 'package:whatsapp_flutter_go/core/session/auth_session.dart';
 import 'package:flutter/material.dart';
 
 import '../../../../core/navigation/navigation_service.dart';
@@ -160,17 +159,9 @@ class ChatViewModel {
     final messageId = message['id']?.toString();
     final conversationType =
         message['conversation_type'] as String? ?? 'direct';
-    final myIdStr = AuthSession.tokens?.user?.id?.toString();
-    final myId = myIdStr != null ? int.tryParse(myIdStr) : null;
 
-    // Send ack_delivered whenever a message is received from someone else (1-to-1 or group)
-    if (messageId != null && senderId != null && senderId != myId) {
-      ChatSocketService.instance.sendDeliveredAck(
-        conversationId: conversationId,
-        messageId: messageId,
-        senderId: senderId,
-      );
-    }
+
+
 
     final state = conversationsBloc.state;
     if (state is! SuccessState<List<Conversation>>) return;

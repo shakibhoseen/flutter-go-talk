@@ -8,6 +8,7 @@ import 'package:whatsapp_flutter_go/core/navigation/navigation_service.dart';
 import 'package:whatsapp_flutter_go/feature/chat_inbox/data/inbox_message_list_cursor_bloc.dart';
 import 'package:whatsapp_flutter_go/feature/group/presentation/group_info_screen.dart';
 import 'package:whatsapp_flutter_go/feature/chat_inbox/presentation/widgets/message_design.dart';
+import 'package:whatsapp_flutter_go/feature/chat_inbox/data/outbox/chat_sync_coordinator.dart';
 import 'package:whatsapp_flutter_go/feature/home/model/chat_message.dart';
 
 import '../../../core/controllers/my_scroll_controller.dart';
@@ -53,14 +54,31 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
 
   void _checkAndSendSeenAck() {
     final items = inboxBloc?.cursorPageHolder.items ?? [];
-    if (items.isNotEmpty && conversationArgs?.id != null) {
-      final latestMessage = items.first;
-      if (!latestMessage.isMine && _lastAckedMessageId != latestMessage.id) {
-        _lastAckedMessageId = latestMessage.id;
+    if (items.isEmpty || conversationArgs?.id == null) return;
+
+    ChatMessage? latestIncoming;
+    for (final item in items) {
+      if (!item.isMine && item.id.isNotEmpty) {
+        final parsedId = int.tryParse(item.id);
+        if (parsedId != null && parsedId > 0) {
+          latestIncoming = item;
+          break;
+        }
+      }
+    }
+
+    if (latestIncoming != null) {
+      final incomingId = int.tryParse(latestIncoming.id) ?? 0;
+      final lastAckedId = _lastAckedMessageId != null
+          ? (int.tryParse(_lastAckedMessageId!) ?? 0)
+          : 0;
+
+      if (incomingId > 0 && incomingId > lastAckedId) {
+        _lastAckedMessageId = latestIncoming.id;
         ChatSocketService.instance.sendSeenAck(
           conversationId: conversationArgs!.id,
-          messageId: latestMessage.id,
-          senderId: int.tryParse(latestMessage.senderId) ?? 0,
+          messageId: latestIncoming.id,
+          senderId: int.tryParse(latestIncoming.senderId) ?? 0,
         );
       }
     }
@@ -92,34 +110,22 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
         isReverse: true,
       );
       _listenToSocketEvents();
-      _listenToSocketConnectionState();
+      _registerActiveBloc();
     }
 
     super.initState();
   }
 
-  SocketConnectionState? _lastConnectionState;
-
-  void _listenToSocketConnectionState() {
-    _lastConnectionState = ChatSocketService.instance.connectionState.value;
-    ChatSocketService.instance.connectionState.addListener(_handleSocketStateChange);
-  }
-
-  void _handleSocketStateChange() async {
-    final currentState = ChatSocketService.instance.connectionState.value;
-    final wasDisconnected = _lastConnectionState == SocketConnectionState.reconnecting ||
-        _lastConnectionState == SocketConnectionState.disconnected;
-    _lastConnectionState = currentState;
-
-    if (wasDisconnected && currentState == SocketConnectionState.connected) {
-      log(
-        'Socket reconnected, syncing missed messages for conversation: ${conversationArgs?.id}',
-        name: 'ChatInboxScreen',
+  void _registerActiveBloc() {
+    if (inboxBloc != null) {
+      ChatSyncCoordinator.instance.registerActiveBloc(
+        inboxBloc!,
+        onSyncSuccess: () {
+          if (mounted) {
+            _checkAndSendSeenAck();
+          }
+        },
       );
-      final success = await inboxBloc?.syncMissedMessages();
-      if (mounted && success == true) {
-        _checkAndSendSeenAck();
-      }
     }
   }
 
@@ -147,7 +153,7 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
     );
   }
 
-  void _handleNewMessage(Map<String, dynamic> json) {
+  void _handleNewMessage(Map<String, dynamic> json) async {
     log(
       'new message: $json',
       name: 'ChatInboxScreen',
@@ -163,7 +169,7 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
     final hasProfile =
         inboxBloc?.userProfiles.containsKey(senderId) ?? false;
 
-    inboxBloc?.handleNewMessage(
+    await inboxBloc?.handleNewMessage(
       message: message,
       profile: senderId > 0 && !hasProfile
           ? ReadReceiptUser(
@@ -175,13 +181,6 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
     );
 
     if (!message.isMine) {
-      if (conversationArgs?.id != null && message.id.isNotEmpty) {
-        ChatSocketService.instance.sendDeliveredAck(
-          conversationId: conversationArgs!.id,
-          messageId: message.id,
-          senderId: senderId,
-        );
-      }
       _checkAndSendSeenAck();
     }
   }
@@ -277,10 +276,10 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
 
   void _send() {
     final text = _controller.text.trim();
-    if (text.isEmpty) return;
-    ChatSocketService.instance.sendMessage(
-      conversationId: conversationArgs!.id,
+    if (text.isEmpty || conversationArgs?.id == null) return;
+    inboxBloc?.sendOutgoingMessage(
       content: text,
+      currentUserId: _myId,
     );
     _controller.clear();
   }
@@ -289,7 +288,9 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
 
   @override
   void dispose() {
-    ChatSocketService.instance.connectionState.removeListener(_handleSocketStateChange);
+    if (inboxBloc != null) {
+      ChatSyncCoordinator.instance.unregisterActiveBloc(inboxBloc!);
+    }
     _removeNewMessageListener?.call();
     _removeStatusUpdatedListener?.call();
     _removeWatermarkListener?.call();

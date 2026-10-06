@@ -10,6 +10,7 @@ import '../data/http_chat_repository.dart';
 import '../../../core/db/network/socket/socket_event.dart';
 import '../model/chat_message.dart';
 import '../model/conversation.dart';
+import '../../chat_inbox/data/outbox/client_message_id_generator.dart';
 
 /// The 1:1/group thread — `hk`'s `MessageHomePage` equivalent.
 ///
@@ -129,6 +130,7 @@ class _ChatThreadPageState extends State<ChatThreadPage> {
     ChatSocketService.instance.sendMessage(
       conversationId: widget.conversation.id,
       content: text,
+      clientMessageId: ClientMessageIdGenerator.generate(),
     );
     _controller.clear();
   }

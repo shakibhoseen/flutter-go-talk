@@ -9,6 +9,7 @@ import '../../core/di/di.dart';
 import '../../core/session/auth_bootstrap.dart';
 import '../../core/session/auth_session.dart';
 import '../../core/session/session_cubit.dart';
+import '../../feature/chat_inbox/data/outbox/chat_sync_coordinator.dart';
 import '../app_version/app_version_service.dart';
 
 class AppStartup {
@@ -44,6 +45,7 @@ class AppStartup {
     );
 
     if (AuthSession.isSignedIn) {
+      ChatSyncCoordinator.instance.start();
       ChatSocketService.instance.connect();
     }
   }

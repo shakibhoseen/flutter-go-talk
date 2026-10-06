@@ -7,6 +7,7 @@ import 'package:whatsapp_flutter_go/core/session/session_cubit.dart';
 import 'package:whatsapp_flutter_go/core/state/common_base_bloc.dart';
 import 'package:whatsapp_flutter_go/core/state/simple_bloc_parent.dart';
 
+import '../../../chat_inbox/data/outbox/chat_sync_coordinator.dart';
 import '../../../login/model/login_response.dart';
 import '../../data/auth_login_repository.dart';
 
@@ -48,6 +49,7 @@ class ViewModel {
       isLoggedIn: true,
       accessToken: response.token,
     );
+    ChatSyncCoordinator.instance.start();
     ChatSocketService.instance.connect();
     NavigationService.removeALlAndReplace(ChatRoutes.home);
   }

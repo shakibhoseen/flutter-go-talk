@@ -14,6 +14,7 @@ import 'package:whatsapp_flutter_go/core/session/session_cubit.dart';
 import 'package:whatsapp_flutter_go/core/state/common_base_bloc.dart';
 
 import '../../login/model/login_response.dart';
+import '../../chat_inbox/data/outbox/chat_sync_coordinator.dart';
 import 'chat_page.dart';
 import 'profile_page.dart';
 import '../../profile/presentation/profile_edit_screen.dart';
@@ -99,6 +100,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 return [
                   PopupMenuItem(
                     onTap: () {
+                      ChatSyncCoordinator.instance.stop();
                       ChatSocketService.instance.disconnect();
                       AuthSession.clear();
                       locator<SessionCubit>().sync(isLoggedIn: false);

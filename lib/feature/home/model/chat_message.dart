@@ -25,6 +25,7 @@ class TimeStamp extends BaseModel {
 class ChatMessage extends BaseModel {
   const ChatMessage({
     required this.id,
+    this.clientMessageId,
     required this.senderId,
     required this.receiverId,
     required this.message,
@@ -45,6 +46,7 @@ class ChatMessage extends BaseModel {
   final List<ReadReceiptUser> readBy;
   final int readCount;
   final String id;
+  final String? clientMessageId;
   final String senderId;
   final String receiverId;
   final String message;
@@ -77,6 +79,7 @@ class ChatMessage extends BaseModel {
 
     return ChatMessage(
       id: json['id']?.toString() ?? '',
+      clientMessageId: json['client_message_id']?.toString(),
       senderId: senderId,
       receiverId: json['conversation_id']?.toString() ?? '',
       message: json['content'] as String? ?? '',
@@ -88,30 +91,42 @@ class ChatMessage extends BaseModel {
       senderAvatar: json['sender_avatar'] as String? ?? '',
       readBy: readByList,
       readCount: readCount,
-      isSeen: json['is_seen'] == true || readCount > 0,
-      isDelivered: json['is_delivered'] == true || json['is_seen'] == true || readCount > 0,
+      isSeen: json['is_seen'] == true,
+      isDelivered: json['is_delivered'] == true || json['is_seen'] == true,
     );
   }
 
   ChatMessage copyWith({
+    String? id,
+    String? clientMessageId,
+    String? senderId,
+    String? receiverId,
+    String? message,
+    DateTime? sentAt,
+    String? messageType,
+    bool? isMine,
     bool? isSeen,
     bool? isDelivered,
+    TimeStamp? timeStamp,
+    String? senderName,
+    String? senderAvatar,
     List<ReadReceiptUser>? readBy,
     int? readCount,
   }) {
     return ChatMessage(
-      id: id,
-      senderId: senderId,
-      receiverId: receiverId,
-      message: message,
-      sentAt: sentAt,
-      messageType: messageType,
-      isMine: isMine,
+      id: id ?? this.id,
+      clientMessageId: clientMessageId ?? this.clientMessageId,
+      senderId: senderId ?? this.senderId,
+      receiverId: receiverId ?? this.receiverId,
+      message: message ?? this.message,
+      sentAt: sentAt ?? this.sentAt,
+      messageType: messageType ?? this.messageType,
+      isMine: isMine ?? this.isMine,
       isSeen: isSeen ?? this.isSeen,
       isDelivered: isDelivered ?? this.isDelivered,
-      timeStamp: timeStamp,
-      senderName: senderName,
-      senderAvatar: senderAvatar,
+      timeStamp: timeStamp ?? this.timeStamp,
+      senderName: senderName ?? this.senderName,
+      senderAvatar: senderAvatar ?? this.senderAvatar,
       readBy: readBy ?? this.readBy,
       readCount: readCount ?? this.readCount,
     );
@@ -121,6 +136,7 @@ class ChatMessage extends BaseModel {
   Map<String, dynamic> toJson() {
     return {
       'id': id,
+      if (clientMessageId != null) 'client_message_id': clientMessageId,
       'sender_id': senderId,
       'conversation_id': receiverId,
       'content': message,

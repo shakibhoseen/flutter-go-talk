@@ -188,6 +188,7 @@ class ChatSocketService with WidgetsBindingObserver {
   void sendMessage({
     required String conversationId,
     required String content,
+    required String clientMessageId,
     String messageType = 'text',
   }) {
     send(
@@ -197,6 +198,7 @@ class ChatSocketService with WidgetsBindingObserver {
           'conversation_id': conversationId,
           'content': content,
           'message_type': messageType,
+          'client_message_id': clientMessageId,
         },
       }),
     );
