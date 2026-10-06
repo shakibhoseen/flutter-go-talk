@@ -155,9 +155,6 @@ class ChatViewModel {
     final conversationId = message['conversation_id'] as String?;
     if (conversationId == null) return;
 
-    final state = conversationsBloc.state;
-    if (state is! SuccessState<List<Conversation>>) return;
-
     final content = message['content'] as String?;
     final senderId = message['sender_id'] as int?;
     final messageId = message['id']?.toString();
@@ -166,34 +163,38 @@ class ChatViewModel {
     final myIdStr = AuthSession.tokens?.user?.id?.toString();
     final myId = myIdStr != null ? int.tryParse(myIdStr) : null;
 
-    // Only send ack_delivered for 1-to-1 chats to avoid group N x N broadcast spam
-    if (messageId != null &&
-        senderId != null &&
-        senderId != myId &&
-        conversationType != 'group') {
+    // Send ack_delivered whenever a message is received from someone else (1-to-1 or group)
+    if (messageId != null && senderId != null && senderId != myId) {
       ChatSocketService.instance.sendDeliveredAck(
         conversationId: conversationId,
         messageId: messageId,
         senderId: senderId,
       );
     }
+
+    final state = conversationsBloc.state;
+    if (state is! SuccessState<List<Conversation>>) return;
+
     final at = DateTime.tryParse(message['created_at'] as String? ?? '');
 
     final conversations = List<Conversation>.from(state.data);
     final index = conversations.indexWhere((c) => c.id == conversationId);
 
     if (index != -1) {
+      final parsedMsgId = messageId != null ? int.tryParse(messageId) : null;
       final updated = conversations
           .removeAt(index)
-          .copyWithNewMessage(content: content, senderId: senderId, at: at);
+          .copyWithNewMessage(messageId: parsedMsgId, content: content, senderId: senderId, at: at);
       conversations.insert(0, updated);
     } else {
+      final parsedMsgId = messageId != null ? int.tryParse(messageId) : null;
       conversations.insert(
         0,
         Conversation(
           id: conversationId,
-          type: message['conversation_type'] as String? ?? 'direct',
+          type: conversationType,
           title: message['sender_name'] as String?,
+          lastMessageId: parsedMsgId,
           lastMessageContent: content,
           lastMessageSenderId: senderId,
           lastMessageAt: at,

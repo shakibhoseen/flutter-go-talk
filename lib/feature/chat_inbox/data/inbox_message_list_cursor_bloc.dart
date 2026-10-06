@@ -183,12 +183,11 @@ class InboxMessageListCursorBloc
       }
 
       final computedSeen =
-          maxOtherSeenId > 0 && messageId <= maxOtherSeenId;
+          !isGroup && maxOtherSeenId > 0 && messageId <= maxOtherSeenId;
 
       final finalSeen = message.isSeen || computedSeen;
 
-      final finalDelivered =
-          message.isDelivered || finalSeen;
+      final finalDelivered = message.isDelivered || finalSeen;
 
       if (message.isSeen == finalSeen &&
           message.isDelivered == finalDelivered) {

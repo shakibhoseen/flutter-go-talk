@@ -16,7 +16,6 @@ import '../../../core/db/network/socket/chat_socket_event_type.dart';
 import '../../../core/db/network/socket/chat_socket_service.dart';
 import '../../../core/session/auth_session.dart';
 import '../../../gen/assets.gen.dart';
-import '../../../core/db/network/socket/socket_event.dart';
 import '../../home/model/conversation.dart';
 import '../../call/presentation/call_screen.dart';
 import '../../call/data/service/call_permission_service.dart';
@@ -151,6 +150,13 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
     );
 
     if (!message.isMine) {
+      if (conversationArgs?.id != null && message.id.isNotEmpty) {
+        ChatSocketService.instance.sendDeliveredAck(
+          conversationId: conversationArgs!.id,
+          messageId: message.id,
+          senderId: senderId,
+        );
+      }
       _checkAndSendSeenAck();
     }
   }
@@ -228,9 +234,19 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
     if (userId == null || userId <= 0) return;
     if (messageId == null || messageId <= 0) return;
 
+    final userName = json['user_name'] as String? ?? '';
+    final userAvatar = json['user_avatar'] as String? ?? '';
+
     inboxBloc?.handleMemberWatermark(
       userId: userId,
       messageId: messageId,
+      profile: (userName.isNotEmpty || userAvatar.isNotEmpty)
+          ? ReadReceiptUser(
+              userId: userId,
+              name: userName,
+              avatarUrl: userAvatar,
+            )
+          : null,
     );
   }
 

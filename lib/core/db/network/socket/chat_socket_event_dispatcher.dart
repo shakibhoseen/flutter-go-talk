@@ -3,6 +3,7 @@ import 'dart:developer';
 
 import 'socket_event.dart';
 import 'chat_socket_service.dart';
+import '../../../session/auth_session.dart';
 
 typedef SocketUnsubscribe = void Function();
 
@@ -48,6 +49,33 @@ class ChatSocketEventDispatcher {
 
     if (type is! String || type.isEmpty) {
       return;
+    }
+
+    // Global Auto-ack: Whenever any message from another sender lands on this device,
+    // immediately confirm delivery back to server (regardless of which screen the user is currently on)
+    if (type == 'new_message') {
+      final payload = event['payload'];
+      if (payload is Map) {
+        final convId = payload['conversation_id']?.toString();
+        final msgId = payload['id']?.toString();
+        final senderId = payload['sender_id'] is int
+            ? payload['sender_id'] as int
+            : int.tryParse(payload['sender_id']?.toString() ?? '');
+        final myIdStr = AuthSession.tokens?.user?.id?.toString();
+        final myId = myIdStr != null ? int.tryParse(myIdStr) : null;
+
+        if (convId != null &&
+            msgId != null &&
+            senderId != null &&
+            myId != null &&
+            senderId != myId) {
+          _socket.sendDeliveredAck(
+            conversationId: convId,
+            messageId: msgId,
+            senderId: senderId,
+          );
+        }
+      }
     }
 
     final listeners = _listeners[type];

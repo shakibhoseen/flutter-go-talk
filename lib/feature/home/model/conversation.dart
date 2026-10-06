@@ -10,6 +10,7 @@ class Conversation extends BaseModel {
     required this.type,
     this.title,
     this.avatarUrl,
+    this.lastMessageId,
     this.lastMessageContent,
     this.lastMessageSenderId,
     this.lastMessageAt,
@@ -22,6 +23,7 @@ class Conversation extends BaseModel {
   final String type; // 'group' | 'direct'
   final String? title;
   final String? avatarUrl;
+  final int? lastMessageId;
   final String? lastMessageContent;
   final int? lastMessageSenderId;
   final DateTime? lastMessageAt;
@@ -39,6 +41,9 @@ class Conversation extends BaseModel {
       type: json['type'] as String? ?? 'direct',
       title: json['title'] as String?,
       avatarUrl: json['avatar_url'] as String?,
+      lastMessageId: json['last_message_id'] is int
+          ? json['last_message_id'] as int
+          : int.tryParse(json['last_message_id']?.toString() ?? ''),
       lastMessageContent: json['last_message_content'] as String?,
       lastMessageSenderId: json['last_message_sender_id'] as int?,
       lastMessageAt: DateTime.tryParse(json['last_message_at'] as String? ?? ''),
@@ -72,6 +77,7 @@ class Conversation extends BaseModel {
     String? type,
     String? title,
     String? avatarUrl,
+    int? lastMessageId,
     String? lastMessageContent,
     int? lastMessageSenderId,
     DateTime? lastMessageAt,
@@ -84,6 +90,7 @@ class Conversation extends BaseModel {
       type: type ?? this.type,
       title: title ?? this.title,
       avatarUrl: avatarUrl ?? this.avatarUrl,
+      lastMessageId: lastMessageId ?? this.lastMessageId,
       lastMessageContent: lastMessageContent ?? this.lastMessageContent,
       lastMessageSenderId: lastMessageSenderId ?? this.lastMessageSenderId,
       lastMessageAt: lastMessageAt ?? this.lastMessageAt,
@@ -94,6 +101,7 @@ class Conversation extends BaseModel {
   }
 
   Conversation copyWithNewMessage({
+    int? messageId,
     String? content,
     int? senderId,
     DateTime? at,
@@ -103,6 +111,7 @@ class Conversation extends BaseModel {
       type: type,
       title: title,
       avatarUrl: avatarUrl,
+      lastMessageId: messageId ?? lastMessageId,
       lastMessageContent: content ?? lastMessageContent,
       lastMessageSenderId: senderId ?? lastMessageSenderId,
       lastMessageAt: at ?? lastMessageAt,
