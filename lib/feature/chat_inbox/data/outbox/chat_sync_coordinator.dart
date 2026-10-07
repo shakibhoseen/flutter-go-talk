@@ -47,6 +47,7 @@ class ChatSyncCoordinator {
 
   InboxMessageListCursorBloc? _activeInboxBloc;
   VoidCallback? _onSyncSuccess;
+  Future<void> Function()? _onConversationsSync;
 
   SocketConnectionState? _lastConnectionState;
   bool _isListening = false;
@@ -130,6 +131,41 @@ class ChatSyncCoordinator {
     }
   }
 
+  /// Registers a callback to refresh global conversations list on reconnect.
+  void registerConversationsSync(Future<void> Function() onSync) {
+    _onConversationsSync = onSync;
+  }
+
+  /// Unregisters the conversation sync callback when disposed.
+  void unregisterConversationsSync() {
+    _onConversationsSync = null;
+  }
+
+  void Function(String conversationId)? _onConversationRemoved;
+
+  /// Registers a callback to remove a conversation from the active list.
+  void registerConversationRemoved(void Function(String conversationId) onRemoved) {
+    _onConversationRemoved = onRemoved;
+  }
+
+  /// Unregisters the conversation removal callback.
+  void unregisterConversationRemoved() {
+    _onConversationRemoved = null;
+  }
+
+  /// Triggers immediate removal of a conversation across registered listeners.
+  void triggerConversationRemoved(String conversationId) {
+    _onConversationRemoved?.call(conversationId);
+  }
+
+  /// Triggers a background refresh of the conversations list.
+  Future<void> triggerConversationsSync() async {
+    final sync = _onConversationsSync;
+    if (sync != null) {
+      await sync();
+    }
+  }
+
   void _handleInitialLoadCompleted() {
     if (!_isRecoveryPending) return;
     _isRecoveryPending = false;
@@ -148,12 +184,11 @@ class ChatSyncCoordinator {
 
   void _handleSocketStateChange() {
     final currentState = socketService.connectionState.value;
-    final wasDisconnected =
-        _lastConnectionState == SocketConnectionState.reconnecting ||
-            _lastConnectionState == SocketConnectionState.disconnected;
+    final wasNotConnected =
+        _lastConnectionState != SocketConnectionState.connected;
     _lastConnectionState = currentState;
 
-    if (wasDisconnected && currentState == SocketConnectionState.connected) {
+    if (wasNotConnected && currentState == SocketConnectionState.connected) {
       handleReconnect(
         inboxBloc: _activeInboxBloc,
         onSyncSuccess: _onSyncSuccess,
@@ -161,12 +196,16 @@ class ChatSyncCoordinator {
     }
   }
 
+  @visibleForTesting
+  void handleSocketStateChangeForTest() => _handleSocketStateChange();
+
   /// Coordinated recovery for a reconnect event.
   ///
   /// Concurrency Guard: Prevents multiple concurrent reconnect runs across onConnected/onResume/manual calls.
   Future<bool> handleReconnect({
     InboxMessageListCursorBloc? inboxBloc,
     VoidCallback? onSyncSuccess,
+    Future<void> Function()? onConversationsSync,
   }) async {
     if (_isReconnecting) {
       log('Reconnect coordination already in progress, skipping duplicate call',
@@ -216,6 +255,18 @@ class ChatSyncCoordinator {
 
       // 3. Process remaining unresolved outbox messages
       await outboxProcessor.processPending();
+
+      // 4. Coordinated conversation list sync across all conversations
+      final convSync = onConversationsSync ?? _onConversationsSync;
+      if (convSync != null) {
+        try {
+          await convSync();
+        } catch (e, st) {
+          log('Error during coordinated conversations sync: $e',
+              name: 'ChatSyncCoordinator', stackTrace: st);
+        }
+      }
+
       return true;
     } finally {
       _isReconnecting = false;

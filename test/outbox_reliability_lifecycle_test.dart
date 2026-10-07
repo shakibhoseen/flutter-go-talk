@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:whatsapp_flutter_go/core/db/network/socket/chat_socket_service.dart';
 import 'package:whatsapp_flutter_go/core/state/cursor/cursor_pagination_response.dart';
 import 'package:whatsapp_flutter_go/feature/chat_inbox/data/inbox_message_list_cursor_bloc.dart';
 import 'package:whatsapp_flutter_go/feature/chat_inbox/data/outbox/chat_outbox_processor.dart';
@@ -447,6 +448,187 @@ void main() {
       expect(bloc.cursorPageHolder.items.first.isDelivered, isTrue);
 
       bloc.close();
+    });
+
+    test('Test 8 — Fresh app launch transition (disconnected -> connecting -> connected) triggers recovery and processes pending outbox', () async {
+      final outbox = InMemoryOutboxStorage();
+      await outbox.save(
+        PendingOutboxMessage(
+          clientMessageId: 'launch-msg-1',
+          conversationId: 'conv-launch',
+          content: 'Sent while offline before kill',
+          createdAt: DateTime.utc(2026, 10, 7, 12, 0),
+        ),
+      );
+
+      final sentMessages = <String>[];
+      final processor = ChatOutboxProcessor(
+        outboxStorage: outbox,
+        isConnectedOverride: () => true,
+        sendMessageOverride: ({
+          required conversationId,
+          required content,
+          required clientMessageId,
+          messageType = 'text',
+        }) {
+          sentMessages.add(clientMessageId);
+        },
+      );
+
+      final socketService = ChatSocketService.instance;
+      socketService.connectionState.value = SocketConnectionState.disconnected;
+
+      final coordinator = ChatSyncCoordinator(
+        outboxProcessor: processor,
+        outboxStorage: outbox,
+        socketService: socketService,
+        isConnectedOverride: () =>
+            socketService.connectionState.value == SocketConnectionState.connected,
+      );
+
+      // Coordinator starts listening on app startup while disconnected
+      coordinator.start();
+
+      // Step 1: Socket begins connecting (disconnected -> connecting)
+      socketService.connectionState.value = SocketConnectionState.connecting;
+      await pumpEventQueue();
+
+      // Connecting state must not trigger recovery prematurely
+      expect(sentMessages, isEmpty);
+
+      // Step 2: Socket finishes connecting (connecting -> connected)
+      socketService.connectionState.value = SocketConnectionState.connected;
+      await pumpEventQueue();
+
+      // Recovery must be triggered and process pending outbox message
+      expect(sentMessages, equals(['launch-msg-1']));
+
+      coordinator.stop();
+      socketService.connectionState.value = SocketConnectionState.disconnected;
+    });
+
+    test('Test 9 — Repeated connected -> connected state notification does NOT trigger duplicate recovery', () async {
+      final outbox = InMemoryOutboxStorage();
+      await outbox.save(
+        PendingOutboxMessage(
+          clientMessageId: 'dup-guard-msg',
+          conversationId: 'conv-dup',
+          content: 'Test duplicate guard',
+          createdAt: DateTime.utc(2026, 10, 7, 12, 0),
+        ),
+      );
+
+      int sendCount = 0;
+      final processor = ChatOutboxProcessor(
+        outboxStorage: outbox,
+        isConnectedOverride: () => true,
+        sendMessageOverride: ({
+          required conversationId,
+          required content,
+          required clientMessageId,
+          messageType = 'text',
+        }) {
+          sendCount++;
+        },
+      );
+
+      final socketService = ChatSocketService.instance;
+      socketService.connectionState.value = SocketConnectionState.disconnected;
+
+      final coordinator = ChatSyncCoordinator(
+        outboxProcessor: processor,
+        outboxStorage: outbox,
+        socketService: socketService,
+        isConnectedOverride: () =>
+            socketService.connectionState.value == SocketConnectionState.connected,
+      );
+
+      coordinator.start();
+
+      // Connect sequence
+      socketService.connectionState.value = SocketConnectionState.connecting;
+      socketService.connectionState.value = SocketConnectionState.connected;
+      await pumpEventQueue();
+      expect(sendCount, equals(1));
+
+      // Repeated socket state check while already connected
+      coordinator.handleSocketStateChangeForTest();
+      await pumpEventQueue();
+
+      // Must NOT trigger duplicate recovery
+      expect(sendCount, equals(1));
+
+      coordinator.stop();
+      socketService.connectionState.value = SocketConnectionState.disconnected;
+    });
+
+    test('Test 10 — Normal reconnect (connected -> reconnecting -> connected) triggers recovery', () async {
+      final outbox = InMemoryOutboxStorage();
+      await outbox.save(
+        PendingOutboxMessage(
+          clientMessageId: 'reconnect-msg',
+          conversationId: 'conv-reconnect',
+          content: 'Retry on reconnect',
+          createdAt: DateTime.utc(2026, 10, 7, 12, 0),
+        ),
+      );
+
+      int sendCount = 0;
+      final processor = ChatOutboxProcessor(
+        outboxStorage: outbox,
+        isConnectedOverride: () => true,
+        sendMessageOverride: ({
+          required conversationId,
+          required content,
+          required clientMessageId,
+          messageType = 'text',
+        }) {
+          sendCount++;
+        },
+      );
+
+      final socketService = ChatSocketService.instance;
+      socketService.connectionState.value = SocketConnectionState.disconnected;
+
+      final coordinator = ChatSyncCoordinator(
+        outboxProcessor: processor,
+        outboxStorage: outbox,
+        socketService: socketService,
+        isConnectedOverride: () =>
+            socketService.connectionState.value == SocketConnectionState.connected,
+      );
+
+      coordinator.start();
+
+      // Initial connect
+      socketService.connectionState.value = SocketConnectionState.connecting;
+      socketService.connectionState.value = SocketConnectionState.connected;
+      await pumpEventQueue();
+      expect(sendCount, equals(1));
+
+      // Connection dropped: connected -> reconnecting
+      socketService.connectionState.value = SocketConnectionState.reconnecting;
+      await pumpEventQueue();
+      expect(sendCount, equals(1));
+
+      // Connection re-established: reconnecting -> connected
+      socketService.connectionState.value = SocketConnectionState.connected;
+      await pumpEventQueue();
+      expect(sendCount, equals(2));
+
+      // Disconnected and reconnect: connected -> disconnected -> connecting -> connected
+      socketService.connectionState.value = SocketConnectionState.disconnected;
+      await pumpEventQueue();
+      socketService.connectionState.value = SocketConnectionState.connecting;
+      await pumpEventQueue();
+      expect(sendCount, equals(2));
+
+      socketService.connectionState.value = SocketConnectionState.connected;
+      await pumpEventQueue();
+      expect(sendCount, equals(3));
+
+      coordinator.stop();
+      socketService.connectionState.value = SocketConnectionState.disconnected;
     });
   });
 }

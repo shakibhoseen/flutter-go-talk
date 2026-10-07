@@ -127,6 +127,11 @@ class FakeChatRepository implements ChatRepository {
   }
 
   @override
+  Future<String> getOrCreateDirectConversation(int targetUserId) async {
+    return 'fake-conv-$targetUserId';
+  }
+
+  @override
   Future<CursorPaginationResponse<ChatMessage>> getMessages(
     String conversationId, {
     int limit = 20,

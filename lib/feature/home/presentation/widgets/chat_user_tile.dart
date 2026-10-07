@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+import 'package:whatsapp_flutter_go/core/helper/relative_time.dart';
 import 'package:whatsapp_flutter_go/core/theme/app_colors.dart';
+import 'package:whatsapp_flutter_go/core/widgets/cute_avatar.dart';
 
 import '../../model/chat_user.dart';
 
@@ -9,66 +12,128 @@ class ChatUserTile extends StatelessWidget {
   final ChatUser user;
   final VoidCallback onTap;
 
-  @override
-  Widget build(BuildContext context) {
-    return ListTile(
-      onTap: onTap,
-      leading: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          CircleAvatar(
-            radius: 24,
-            backgroundColor: AppColors.primaryColor.shade100,
-            child: Text(
-              user.name.isNotEmpty ? user.name[0].toUpperCase() : '?',
-              style: const TextStyle(fontWeight: FontWeight.bold),
-            ),
-          ),
-          if (user.isOnline)
-            Positioned(
-              right: 0,
-              bottom: 0,
-              child: Container(
-                width: 12,
-                height: 12,
-                decoration: BoxDecoration(
-                  color: Colors.green,
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white, width: 2),
-                ),
-              ),
-            ),
-        ],
-      ),
-      title: Text(
-        user.name,
-        style: const TextStyle(fontWeight: FontWeight.w600),
-      ),
-      subtitle: Text(
-        user.lastMessage ?? 'Tap to start chatting',
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
-      trailing: user.unreadCount > 0
-          ? CircleAvatar(
-              radius: 10,
-              backgroundColor: Colors.green,
-              child: Text(
-                '${user.unreadCount}',
-                style: const TextStyle(fontSize: 11, color: Colors.white),
-              ),
-            )
-          : user.lastMessageAt != null
-          ? Text(_formatTime(user.lastMessageAt!))
-          : null,
-    );
+  String _formatTime(DateTime? dt) {
+    if (dt == null) return '';
+    final now = DateTime.now();
+    final localDt = dt.toLocal();
+    if (now.year == localDt.year &&
+        now.month == localDt.month &&
+        now.day == localDt.day) {
+      return DateFormat('hh:mm a').format(localDt);
+    }
+    return relativeTime(dt);
   }
 
-  String _formatTime(DateTime time) {
-    final diff = DateTime.now().difference(time);
-    if (diff.inMinutes < 1) return 'now';
-    if (diff.inHours < 1) return '${diff.inMinutes}m';
-    if (diff.inDays < 1) return '${diff.inHours}h';
-    return '${diff.inDays}d';
+  @override
+  Widget build(BuildContext context) {
+    final hasUnread = user.unreadCount > 0;
+    final timeStr = _formatTime(user.lastMessageAt);
+
+    return InkWell(
+      onTap: onTap,
+      splashColor: AppColors.cyanLight.withValues(alpha: 0.5),
+      highlightColor: AppColors.cyanLight.withValues(alpha: 0.2),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
+        child: Row(
+          children: [
+            CuteAvatar(
+              name: user.name,
+              imageUrl: user.avatarUrl,
+              isOnline: user.isOnline,
+              size: 50,
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          user.name,
+                          style: TextStyle(
+                            fontSize: 15.5,
+                            fontWeight: hasUnread ? FontWeight.w700 : FontWeight.w600,
+                            color: AppColors.neutralColor.shade900,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      if (timeStr.isNotEmpty) ...[
+                        const SizedBox(width: 8),
+                        Text(
+                          timeStr,
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: hasUnread ? FontWeight.w600 : FontWeight.w400,
+                            color: hasUnread
+                                ? AppColors.cyanDark
+                                : AppColors.neutralColor.shade400,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          user.bio ?? user.email ?? user.lastMessage ?? 'Tap to start chatting',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: hasUnread
+                                ? AppColors.neutralColor.shade700
+                                : AppColors.neutralColor.shade500,
+                            fontWeight: hasUnread ? FontWeight.w500 : FontWeight.w400,
+                          ),
+                        ),
+                      ),
+                      if (hasUnread) ...[
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6.5,
+                            vertical: 2.5,
+                          ),
+                          constraints: const BoxConstraints(minWidth: 20),
+                          decoration: BoxDecoration(
+                            color: AppColors.cyanAccent,
+                            borderRadius: BorderRadius.circular(10),
+                            boxShadow: [
+                              BoxShadow(
+                                color: AppColors.cyanAccent.withValues(alpha: 0.35),
+                                blurRadius: 4,
+                                offset: const Offset(0, 1.5),
+                              ),
+                            ],
+                          ),
+                          child: Text(
+                            '${user.unreadCount}',
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.white,
+                              height: 1.1,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }

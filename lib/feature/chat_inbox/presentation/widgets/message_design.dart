@@ -1,26 +1,15 @@
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
-import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:whatsapp_flutter_go/core/helper/my_ui_import.dart';
+import 'package:whatsapp_flutter_go/core/widgets/cute_avatar.dart';
 
-import 'package:whatsapp_flutter_go/core/config/app_flavor_config.dart';
-import 'package:whatsapp_flutter_go/core/db/network/network_service_type.dart';
-
-import '../../../../gen/assets.gen.dart';
 import '../../../home/model/chat_message.dart';
 import '../../../../core/session/auth_session.dart';
 
-String _getFullUrl(String path) {
-  if (path.isEmpty) return "";
-  if (path.startsWith("http")) return path;
-  final baseUrl = AppFlavorConfig.baseUrlFor(NetworkServiceType.chat);
-
-  if (baseUrl.endsWith('/') && path.startsWith('/')) {
-    return baseUrl + path.substring(1);
-  } else if (!baseUrl.endsWith('/') && !path.startsWith('/')) {
-    return '$baseUrl/$path';
-  }
-  return baseUrl + path;
+enum BubblePosition {
+  single,
+  first,
+  middle,
+  last,
 }
 
 Widget bottomDesign({
@@ -30,25 +19,30 @@ Widget bottomDesign({
   required Function sendMessage,
   required TextEditingController messageController,
 }) {
-  return Padding(
-    padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 0),
-    child: Row(
-      children: [
-        Expanded(
-          child: Padding(
-            padding: const EdgeInsets.all(8.0),
+  return Container(
+    padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      border: Border(
+        top: BorderSide(
+          color: AppColors.neutralColor.shade100,
+          width: 1.0,
+        ),
+      ),
+    ),
+    child: SafeArea(
+      top: false,
+      child: Row(
+        children: [
+          Expanded(
             child: Container(
+              height: 46,
               decoration: BoxDecoration(
-                color: Colors.deepPurple[50],
-                shape: BoxShape.rectangle,
-                border: Border.all(color: Colors.white),
+                color: AppColors.neutralColor.shade100,
                 borderRadius: BorderRadius.circular(24),
-                boxShadow: [],
               ),
               child: Row(
-                mainAxisSize: MainAxisSize.min,
                 children: [
-                  UIHelper.horizontalSpace(7),
                   IconButton(
                     onPressed: () {
                       if (value == '') {
@@ -58,54 +52,140 @@ Widget bottomDesign({
                       }
                     },
                     icon: Icon(
-                      value == '' ? Icons.image : Icons.cancel_outlined,
-                      color: Colors.blue,
+                      value == ''
+                          ? Icons.add_circle_outline_rounded
+                          : Icons.cancel_outlined,
+                      color: AppColors.cyanAccent,
+                      size: 22,
                     ),
                   ),
-                  UIHelper.horizontalSpace(6),
                   Expanded(
                     child: TextField(
                       controller: messageController,
-                      style: TextStyle(),
+                      style: TextStyle(
+                        fontSize: 14.5,
+                        color: AppColors.neutralColor.shade900,
+                      ),
                       decoration: InputDecoration(
-                        hintText: 'Message',
-                        hintStyle: TextStyle(),
+                        isCollapsed: true,
+                        hintText: 'Type a message...',
+                        hintStyle: TextStyle(
+                          fontSize: 14.5,
+                          color: AppColors.neutralColor.shade400,
+                        ),
                         border: InputBorder.none,
+                        enabledBorder: InputBorder.none,
+                        focusedBorder: InputBorder.none,
                       ),
                     ),
                   ),
-                  // Consumer<UploadViewModel>(
-                  //   builder: (context, value, child) {
-                  //     String text = 'init ';
-                  //     if (value.status == UploadStatus.running)
-                  //       text = 'running';
-                  //     else if (value.status == UploadStatus.success)
-                  //       text = 'success';
-                  //     return Text(
-                  //       '${value.progress} $text',
-                  //       style: Constants.customTextStyle(textSize: TextSize.sm),
-                  //     );
-                  //   },
-                  // ),
+                  const SizedBox(width: 8),
                 ],
               ),
             ),
           ),
-        ),
-        SizedBox(
-          height: 50,
-          width: 50,
-          child: FloatingActionButton(
-            shape: const CircleBorder(side: BorderSide(color: Colors.white)),
-            onPressed: () {
-              sendMessage();
-            },
-            child: Icon(Icons.send, color: AppColors.primaryColor),
+          const SizedBox(width: 8),
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: AppColors.cyanAccent,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: AppColors.cyanAccent.withValues(alpha: 0.35),
+                  blurRadius: 6,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: IconButton(
+              onPressed: () => sendMessage(),
+              icon: const Icon(
+                Icons.send_rounded,
+                color: Colors.white,
+                size: 20,
+              ),
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     ),
   );
+}
+
+BorderRadius _getBubbleRadius({
+  required bool isMine,
+  required BubblePosition position,
+}) {
+  const double rBig = 18.0;
+  const double rSmall = 4.0;
+
+  if (isMine) {
+    // Outgoing (Mine on Right): Left corners facing center are always round (rBig)
+    switch (position) {
+      case BubblePosition.single:
+        return const BorderRadius.only(
+          topLeft: Radius.circular(rBig),
+          topRight: Radius.circular(rBig),
+          bottomLeft: Radius.circular(rBig),
+          bottomRight: Radius.circular(rSmall),
+        );
+      case BubblePosition.first:
+        return const BorderRadius.only(
+          topLeft: Radius.circular(rBig),
+          topRight: Radius.circular(rBig),
+          bottomLeft: Radius.circular(rBig),
+          bottomRight: Radius.circular(rSmall),
+        );
+      case BubblePosition.middle:
+        return const BorderRadius.only(
+          topLeft: Radius.circular(rBig),
+          topRight: Radius.circular(rSmall),
+          bottomLeft: Radius.circular(rBig),
+          bottomRight: Radius.circular(rSmall),
+        );
+      case BubblePosition.last:
+        return const BorderRadius.only(
+          topLeft: Radius.circular(rBig),
+          topRight: Radius.circular(rSmall),
+          bottomLeft: Radius.circular(rBig),
+          bottomRight: Radius.circular(rBig),
+        );
+    }
+  } else {
+    // Incoming (Other on Left): Right corners facing center are always round (rBig)
+    switch (position) {
+      case BubblePosition.single:
+        return const BorderRadius.only(
+          topLeft: Radius.circular(rBig),
+          topRight: Radius.circular(rBig),
+          bottomRight: Radius.circular(rBig),
+          bottomLeft: Radius.circular(rSmall),
+        );
+      case BubblePosition.first:
+        return const BorderRadius.only(
+          topLeft: Radius.circular(rBig),
+          topRight: Radius.circular(rBig),
+          bottomRight: Radius.circular(rBig),
+          bottomLeft: Radius.circular(rSmall),
+        );
+      case BubblePosition.middle:
+        return const BorderRadius.only(
+          topLeft: Radius.circular(rSmall),
+          topRight: Radius.circular(rBig),
+          bottomRight: Radius.circular(rBig),
+          bottomLeft: Radius.circular(rSmall),
+        );
+      case BubblePosition.last:
+        return const BorderRadius.only(
+          topLeft: Radius.circular(rSmall),
+          topRight: Radius.circular(rBig),
+          bottomRight: Radius.circular(rBig),
+          bottomLeft: Radius.circular(rBig),
+        );
+    }
+  }
 }
 
 Widget designMessage(
@@ -117,165 +197,206 @@ Widget designMessage(
   bool showSenderName,
   bool showProfile,
   bool isGroup, {
+  BubblePosition position = BubblePosition.single,
+  bool isSameSenderAbove = true,
   List<ReadReceiptUser>? readBy,
   int? readCount,
 }) {
   final hold = isCompare
-      ? showTimeOrNot(before, model.sentAt.millisecondsSinceEpoch)
+      ? showTimeOrNot(
+          before,
+          model.sentAt.millisecondsSinceEpoch,
+          isSameSender: isSameSenderAbove,
+        )
       : null;
+  final isMine = model.isMine;
+
   return Column(
     children: [
       if (hold != null) hold.$1,
       if (todayIndicator)
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+          margin: const EdgeInsets.symmetric(vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
           decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: [Colors.green.shade400, Colors.green.shade700],
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: AppColors.neutralColor.shade200,
+              width: 0.8,
             ),
-            borderRadius: BorderRadius.circular(8),
-            boxShadow: [],
-            image: DecorationImage(
-              image: AssetImage(Assets.lightBg.path),
-              fit: BoxFit.cover,
-            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.03),
+                blurRadius: 4,
+                offset: const Offset(0, 1),
+              ),
+            ],
           ),
           child: Text(
             '${model.timeStamp?.dateCompare}',
-            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+            style: TextStyle(
+              fontSize: 11.5,
+              fontWeight: FontWeight.w600,
+              color: AppColors.neutralColor.shade600,
+            ),
           ),
         ),
-      if (todayIndicator) UIHelper.verticalSpace(20),
-      if (showSenderName)
+      if (showSenderName && !isMine && isGroup)
         Align(
-          alignment: AlignmentGeometry.centerLeft,
+          alignment: Alignment.centerLeft,
           child: Padding(
-            padding: const EdgeInsets.only(left: 44, bottom: 2),
+            padding: const EdgeInsets.only(left: 48, bottom: 3),
             child: Text(
               model.senderName,
-              style: TextStyle(fontSize: 11, color: Colors.grey),
+              style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: AppColors.cyanDark,
+              ),
             ),
           ),
         ),
       Align(
-        alignment: model.isMine ? Alignment.centerRight : Alignment.centerLeft,
+        alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 2),
+          padding: const EdgeInsets.symmetric(horizontal: 12.0),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              /*              if (model.isFailed ?? false)
-                IconButton(
-                    iconSize: 24,
-                    onPressed: () {
-                      resentMessage(model);
-                    },
-                    icon: const Icon(
-                      Icons.error,
-                      color: Colors.red,
-                    )),*/
-              if (!model.isMine && isGroup)
+              if (!isMine && isGroup)
                 Padding(
-                  padding: const EdgeInsets.only(right: 8.0),
-                  child: ClipOval(
-                    child: (showProfile)
-                        ? CachedNetworkImage(
-                            imageUrl: _getFullUrl(model.senderAvatar),
-                            width: 28,
-                            height: 28,
-                            fit: BoxFit.cover,
-                            errorWidget: (context, url, error) => CircleAvatar(
-                              radius: 14,
-                              backgroundColor: Colors.grey.shade300,
-                              child: const Icon(
-                                Icons.person,
-                                size: 16,
-                                color: Colors.white,
-                              ),
-                            ),
-                          )
-                        : SizedBox(width: 28),
-                  ),
+                  padding: const EdgeInsets.only(right: 8.0, bottom: 1),
+                  child: showProfile
+                      ? CuteAvatar(
+                          name: model.senderName,
+                          imageUrl: model.senderAvatar,
+                          size: 28,
+                          showOnlineDot: false,
+                        )
+                      : const SizedBox(width: 28),
                 ),
-              Container(
-                constraints: const BoxConstraints(maxWidth: 240),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 6,
-                ),
-                decoration: BoxDecoration(
-                  color: model.isMine
-                      ? Colors.grey.shade100
-                      : Colors.grey.shade100,
+              Builder(
+                builder: (context) {
+                  final screenWidth = MediaQuery.sizeOf(context).width;
+                  final isShortMessage =
+                      !model.message.contains('\n') && model.message.length <= 20;
 
-                  borderRadius: BorderRadius.only(
-                    topLeft: model.isMine
-                        ? const Radius.circular(20)
-                        : const Radius.circular(0),
-                    topRight: model.isMine
-                        ? const Radius.circular(0)
-                        : const Radius.circular(20),
-                    bottomLeft: model.isMine
-                        ? const Radius.circular(20)
-                        : const Radius.circular(12),
-                    bottomRight: model.isMine
-                        ? const Radius.circular(12)
-                        : const Radius.circular(20),
-                  ),
-                  boxShadow: [],
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Flex(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      direction: model.message.length > 18
-                          ? Axis.vertical
-                          : Axis.horizontal,
-                      children: [
-                        Text(
-                          model.message,
-                          overflow: TextOverflow.clip,
-                          style: TextStyle(fontSize: 12, color: Colors.black),
+                  final timeAndCheckWidget = Row(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Text(
+                        '${model.timeStamp?.hourMinute}',
+                        style: TextStyle(
+                          fontSize: 10.5,
+                          fontWeight: FontWeight.w400,
+                          color: isMine
+                              ? Colors.white.withValues(alpha: 0.85)
+                              : AppColors.neutralColor.shade400,
                         ),
-                        UIHelper.horizontalSpace8,
-                        Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            model.isMine
-                                ? model.isSeen
-                                    ? Icon(
-                                        FontAwesomeIcons.checkDouble.data,
-                                        size: 12,
-                                        color: Colors.red,
-                                      )
-                                    : (model.isDelivered
-                                        ? Icon(
-                                            FontAwesomeIcons.checkDouble.data,
-                                            size: 12,
-                                            color: Colors.grey,
-                                          )
-                                        : Icon(
-                                            FontAwesomeIcons.check.data,
-                                            size: 12,
-                                            color: Colors.grey,
-                                          ))
-                                : Container(),
-                            Text(
-                              '${model.timeStamp?.hourMinute}',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: Colors.blueGrey,
-                              ),
+                      ),
+                      if (isMine) ...[
+                        const SizedBox(width: 3.5),
+                        model.isSeen
+                            ? const Icon(
+                                Icons.done_all_rounded,
+                                size: 14,
+                                color: AppColors.seenNavy,
+                              )
+                            : (model.isDelivered
+                                ? Icon(
+                                    Icons.done_all_rounded,
+                                    size: 14,
+                                    color: Colors.white.withValues(alpha: 0.65),
+                                  )
+                                : Icon(
+                                    Icons.done_rounded,
+                                    size: 14,
+                                    color: Colors.white.withValues(alpha: 0.65),
+                                  )),
+                      ],
+                    ],
+                  );
+
+                  return Container(
+                    constraints: BoxConstraints(
+                      maxWidth: screenWidth * 0.76,
+                      minWidth: 50,
+                    ),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 6.5,
+                    ),
+                    decoration: BoxDecoration(
+                      color: isMine ? AppColors.cyanAccent : Colors.white,
+                      borderRadius: _getBubbleRadius(
+                        isMine: isMine,
+                        position: position,
+                      ),
+                      border: isMine
+                          ? null
+                          : Border.all(
+                              color: AppColors.neutralColor.shade200,
+                              width: 0.8,
                             ),
-                          ],
+                      boxShadow: [
+                        BoxShadow(
+                          color: isMine
+                              ? AppColors.cyanAccent.withValues(alpha: 0.22)
+                              : Colors.black.withValues(alpha: 0.03),
+                          blurRadius: 5,
+                          offset: const Offset(0, 1.5),
                         ),
                       ],
                     ),
-                  ],
-                ),
+                    child: isShortMessage
+                        ? Row(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              Flexible(
+                                child: Text(
+                                  model.message,
+                                  style: TextStyle(
+                                    fontSize: 14.5,
+                                    height: 1.25,
+                                    color: isMine
+                                        ? Colors.white
+                                        : AppColors.neutralColor.shade900,
+                                    fontWeight: FontWeight.w400,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              timeAndCheckWidget,
+                            ],
+                          )
+                        : Column(
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Align(
+                                alignment: Alignment.centerLeft,
+                                child: Text(
+                                  model.message,
+                                  style: TextStyle(
+                                    fontSize: 14.5,
+                                    height: 1.3,
+                                    color: isMine
+                                        ? Colors.white
+                                        : AppColors.neutralColor.shade900,
+                                    fontWeight: FontWeight.w400,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              timeAndCheckWidget,
+                            ],
+                          ),
+                  );
+                },
               ),
             ],
           ),
@@ -286,74 +407,72 @@ Widget designMessage(
           final myId = AuthSession.tokens?.user?.id?.toString();
           final effectiveReadBy = readBy ?? model.readBy;
           final effectiveReadCount = readCount ?? model.readCount;
-          final otherReadBy = effectiveReadBy.where((u) => u.userId.toString() != myId).toList();
-          
+          final otherReadBy = effectiveReadBy
+              .where((u) => u.userId.toString() != myId)
+              .toList();
+
           if (!isGroup || otherReadBy.isEmpty) return const SizedBox();
 
-          final isMeInReadBy = effectiveReadBy.any((u) => u.userId.toString() == myId);
-          final totalOtherReaders = isMeInReadBy ? effectiveReadCount - 1 : effectiveReadCount;
+          final isMeInReadBy =
+              effectiveReadBy.any((u) => u.userId.toString() == myId);
+          final totalOtherReaders =
+              isMeInReadBy ? effectiveReadCount - 1 : effectiveReadCount;
           final visibleCount = otherReadBy.length > 3 ? 3 : otherReadBy.length;
           final extraCount = totalOtherReaders - visibleCount;
-          
-          return Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              // লুপ চালিয়ে ছোট ছোট Avatar দেখাব (সর্বোচ্চ ৩টি)
-              ...otherReadBy.take(3).map(
-                (user) => Padding(
-                  padding: const EdgeInsets.only(left: 2.0),
-                  child: ClipOval(
-                    child: CachedNetworkImage(
-                      imageUrl: _getFullUrl(user.avatarUrl),
-                      width: 14,
-                      height: 14,
-                      fit: BoxFit.cover,
-                      errorWidget: (context, url, error) => CircleAvatar(
-                        radius: 7,
-                        backgroundColor: Colors.grey.shade300,
-                        child: const Icon(
-                          Icons.person,
-                          size: 10,
-                          color: Colors.white,
-                        ),
+
+          return Padding(
+            padding: const EdgeInsets.only(right: 14.0, top: 2.0),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                ...otherReadBy.take(3).map(
+                  (user) => Padding(
+                    padding: const EdgeInsets.only(left: 2.0),
+                    child: CuteAvatar(
+                      name: user.name,
+                      imageUrl: user.avatarUrl,
+                      size: 14,
+                      showOnlineDot: false,
+                    ),
+                  ),
+                ),
+                if (extraCount > 0)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 3.0),
+                    child: Text(
+                      '+$extraCount',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.neutralColor.shade600,
                       ),
                     ),
                   ),
-                ),
-              ),
-              if (extraCount > 0)
-                Padding(
-                  padding: const EdgeInsets.only(left: 3.0),
-                  child: Text(
-                    '+$extraCount',
-                    style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.grey.shade600,
-                    ),
-                  ),
-                ),
-            ],
+              ],
+            ),
           );
-        }
+        },
       ),
     ],
   );
 }
 
-(Widget, bool) showTimeOrNot(int before, int after) {
-  //space, name show or not/profile show or not
+(Widget, bool) showTimeOrNot(
+  int before,
+  int after, {
+  bool isSameSender = true,
+}) {
   int difference = (before - after).abs();
 
-  if (difference < 3600000) {
-    // Less than an hour
-    if (difference < 600000) {
-      // Less than 10 minutes
-      return (UIHelper.verticalSpace(3), false); // Small; // Tiny
-    } else {
-      return (UIHelper.verticalSpace(24), true); // Mid-sized
-    }
+  if (difference < 600000) {
+    // Gap 1: Less than 10 minutes
+    // Same sender is tightly grouped (2.5dp); different sender has gentle separation (10dp)
+    return (UIHelper.verticalSpace(isSameSender ? 2.5 : 10.0), false);
+  } else if (difference < 3600000) {
+    // Gap 2: 10 minutes to 1 hour (small gap)
+    return (UIHelper.verticalSpace(14.0), true);
   } else {
-    return (UIHelper.verticalSpace(32), true); // Big
+    // Gap 3: 1 hour or more (more gap)
+    return (UIHelper.verticalSpace(26.0), true);
   }
 }

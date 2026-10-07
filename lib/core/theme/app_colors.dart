@@ -1,15 +1,47 @@
 import 'package:flutter/material.dart';
 
+class PastelPalette {
+  final Color bg;
+  final Color text;
+  const PastelPalette({required this.bg, required this.text});
+}
+
 class AppColors {
   AppColors._();
 
   static const Color colorFuchsia500 = Color(0xFFD946EF);
   static const Color colorFuchsia50 = Color(0xFFFDF4FF);
-  static const Color colorFoundationPrimary500 = Color(0xFF00A788);
+  static const Color colorFoundationPrimary500 = Color(0xFF00C3F8);
   static const Color colorViolate100 = Color(0xFFEDE9FE);
   static const Color shadowColor = Color(0x26000000);
-  static const Color selectionColorPositive = Color(0xFF3AAFA2);
+  static const Color selectionColorPositive = Color(0xFF00C3F8);
   static const Color selectionColorNegative = Color(0xFFFA6969);
+
+  // Cute Modern Cyan & Online Colors
+  static const Color cyanAccent = Color(0xFF00C3F8);
+  static const Color cyanLight = Color(0xFFE0F7FE);
+  static const Color cyanDark = Color(0xFF0284C7);
+  static const Color onlineGreen = Color(0xFF22C55E);
+  static const Color offlineGrey = Color(0xFFCBD5E1);
+  static const Color seenNavy = Color(0xFF0C4A6E);
+
+  // Cute Pastel Avatar Palette (as seen in screenshots: MF, MJ, DR, SL, GM, etc.)
+  static const List<PastelPalette> pastelPalettes = [
+    PastelPalette(bg: Color(0xFFD9F99D), text: Color(0xFF365314)), // Soft lime/olive (MF)
+    PastelPalette(bg: Color(0xFFBAE6FD), text: Color(0xFF0369A1)), // Soft sky blue (AG)
+    PastelPalette(bg: Color(0xFFFED7AA), text: Color(0xFF9A3412)), // Soft peach/orange (MJ)
+    PastelPalette(bg: Color(0xFFA7F3D0), text: Color(0xFF065F46)), // Soft mint (DR)
+    PastelPalette(bg: Color(0xFFDDD6FE), text: Color(0xFF5B21B6)), // Soft lavender (SC)
+    PastelPalette(bg: Color(0xFFFBCFE8), text: Color(0xFF9D174D)), // Soft pink (GM)
+    PastelPalette(bg: Color(0xFFFEF08A), text: Color(0xFF854D0E)), // Soft butter yellow (SL)
+    PastelPalette(bg: Color(0xFFCFFAFE), text: Color(0xFF155E75)), // Soft cyan (WH)
+  ];
+
+  static PastelPalette getPastelFor(String name) {
+    if (name.isEmpty) return pastelPalettes[0];
+    final hash = name.codeUnits.fold<int>(0, (prev, elem) => prev + elem);
+    return pastelPalettes[hash % pastelPalettes.length];
+  }
 
   // material style
   static const Color foundationWhite = Color(0xFFFFFFFF);
@@ -32,19 +64,18 @@ class AppColors {
   );
 
   static const MaterialColor primaryColor = MaterialColor(
-    0xFF00A788,
-    // 0% comes in here, this will be color picked if no shade is selected when defining a Color property which doesn’t require a swatch.
+    0xFF00C3F8,
     <int, Color>{
-      50: Color(0xFFE6F8F4), //10%
-      100: Color(0xFFB0E9DE), //20%
-      200: Color(0xFF8ADECE), //30%
-      300: Color(0xFF54CFB8), //40%
-      400: Color(0xFF33C5AA), //50%
-      500: Color(0xFF00B795), //60%
-      600: Color(0xFF00A788), //70%
-      700: Color(0xFF00826A), //80%
-      800: Color(0xFF006552), //80%
-      900: Color(0xFF004D3F), //80%
+      50: Color(0xFFE0F7FE), //10%
+      100: Color(0xFFBAE6FD), //20%
+      200: Color(0xFF7DD3FC), //30%
+      300: Color(0xFF38BDF8), //40%
+      400: Color(0xFF0EA5E9), //50%
+      500: Color(0xFF00C3F8), //60%
+      600: Color(0xFF0284C7), //70%
+      700: Color(0xFF0369A1), //80%
+      800: Color(0xFF075985), //80%
+      900: Color(0xFF0C4A6E), //80%
     },
   );
 

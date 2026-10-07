@@ -1,11 +1,12 @@
 import 'dart:io';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:whatsapp_flutter_go/feature/login/model/login_response.dart';
-import 'package:whatsapp_flutter_go/core/di/di.dart';
-import 'package:whatsapp_flutter_go/core/state/common_base_bloc.dart';
 import 'package:whatsapp_flutter_go/feature/profile/bloc/profile_bloc.dart';
+import 'package:whatsapp_flutter_go/core/state/common_base_bloc.dart';
+import 'package:whatsapp_flutter_go/core/theme/app_colors.dart';
 import 'package:whatsapp_flutter_go/core/config/app_flavor_config.dart';
 import 'package:whatsapp_flutter_go/core/db/network/network_service_type.dart';
 
@@ -58,55 +59,78 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
       setState(() {
         _pickedImage = File(pickedFile.path);
       });
-      // TODO: Call your API to upload the image here. Example:
-      if(_pickedImage?.path !=null){
+      if (_pickedImage?.path != null) {
         await _profileBloc.uploadProfileImage(_pickedImage!.path);
       }
-
     }
   }
 
   void _showImagePickerOptions() {
     showModalBottomSheet(
       context: context,
+      backgroundColor: Colors.white,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       builder: (context) {
         return SafeArea(
           child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 20),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                _buildPickerOption(
-                  icon: Icons.camera_alt,
-                  label: 'Camera',
-                  onTap: () {
-                    Navigator.pop(context);
-                    _pickImage(ImageSource.camera);
-                  },
-                ),
-                _buildPickerOption(
-                  icon: Icons.photo_library,
-                  label: 'Gallery',
-                  onTap: () {
-                    Navigator.pop(context);
-                    _pickImage(ImageSource.gallery);
-                  },
-                ),
-                if (_pickedImage != null)
-                  _buildPickerOption(
-                    icon: Icons.delete,
-                    label: 'Remove',
-                    onTap: () {
-                      Navigator.pop(context);
-                      setState(() {
-                        _pickedImage = null;
-                      });
-                      // TODO: Call API to remove image from backend
-                    },
+                Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: AppColors.neutralColor.shade300,
+                    borderRadius: BorderRadius.circular(2),
                   ),
+                ),
+                const SizedBox(height: 20),
+                const Text(
+                  'Profile Photo',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF0F172A),
+                  ),
+                ),
+                const SizedBox(height: 24),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    _buildPickerOption(
+                      icon: Icons.camera_alt_rounded,
+                      label: 'Camera',
+                      onTap: () {
+                        Navigator.pop(context);
+                        _pickImage(ImageSource.camera);
+                      },
+                    ),
+                    _buildPickerOption(
+                      icon: Icons.photo_library_rounded,
+                      label: 'Gallery',
+                      onTap: () {
+                        Navigator.pop(context);
+                        _pickImage(ImageSource.gallery);
+                      },
+                    ),
+                    if (_pickedImage != null)
+                      _buildPickerOption(
+                        icon: Icons.delete_outline_rounded,
+                        label: 'Remove',
+                        isDestructive: true,
+                        onTap: () {
+                          Navigator.pop(context);
+                          setState(() {
+                            _pickedImage = null;
+                          });
+                        },
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 8),
               ],
             ),
           ),
@@ -115,32 +139,52 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
     );
   }
 
-  Widget _buildPickerOption({required IconData icon, required String label, required VoidCallback onTap}) {
+  Widget _buildPickerOption({
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+    bool isDestructive = false,
+  }) {
     return InkWell(
       onTap: onTap,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(color: Colors.grey.shade300),
+      borderRadius: BorderRadius.circular(16),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: isDestructive ? const Color(0xFFFEE2E2) : AppColors.cyanLight,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                icon,
+                color: isDestructive ? const Color(0xFFEF4444) : AppColors.cyanDark,
+                size: 26,
+              ),
             ),
-            child: Icon(icon, color: Colors.teal, size: 28),
-          ),
-          const SizedBox(height: 8),
-          Text(label, style: const TextStyle(color: Colors.black54)),
-        ],
+            const SizedBox(height: 8),
+            Text(
+              label,
+              style: TextStyle(
+                color: isDestructive ? const Color(0xFFEF4444) : const Color(0xFF334155),
+                fontWeight: FontWeight.w600,
+                fontSize: 13,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
   String _getFullUrl(String? path) {
-    if (path == null || path.isEmpty) return 'https://cdn.pixabay.com/photo/2015/10/05/22/37/blank-profile-picture-973460_1280.png';
-    if (path.startsWith("http")) return path;
+    if (path == null || path.isEmpty) return '';
+    if (path.startsWith('http')) return path;
     final baseUrl = AppFlavorConfig.baseUrlFor(NetworkServiceType.chat);
-    
+
     if (baseUrl.endsWith('/') && path.startsWith('/')) {
       return baseUrl + path.substring(1);
     } else if (!baseUrl.endsWith('/') && !path.startsWith('/')) {
@@ -152,52 +196,118 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: const Color(0xFFF8FAFC),
       appBar: AppBar(
-        title: const Text('Profile'),
+        title: const Text(
+          'Edit Profile',
+          style: TextStyle(
+            color: Color(0xFF0F172A),
+            fontWeight: FontWeight.w700,
+            fontSize: 18,
+          ),
+        ),
+        centerTitle: true,
+        backgroundColor: Colors.white,
+        elevation: 0.5,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Color(0xFF0F172A), size: 20),
+          onPressed: () => Navigator.pop(context),
+        ),
       ),
       body: _profileBloc.build(
         builder: (context, state) {
           if (state is LoadingState || state is InitialState) {
-            return const Center(child: CircularProgressIndicator());
+            return const Center(child: CircularProgressIndicator(color: AppColors.cyanAccent));
           }
           final user = state is SuccessState<User> ? state.data : null;
+          final pastel = AppColors.getPastelFor(user?.name ?? 'User');
+          final initials = (user?.name?.isNotEmpty == true) ? user!.name![0].toUpperCase() : 'U';
 
           return SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
             child: Column(
               children: [
-                const SizedBox(height: 30),
                 Center(
                   child: GestureDetector(
                     onTap: _showImagePickerOptions,
                     child: Stack(
                       children: [
-                        CircleAvatar(
-                          radius: 70,
-                          backgroundColor: Colors.grey.shade300,
-                          backgroundImage: _pickedImage != null
-                              ? FileImage(_pickedImage!) as ImageProvider
-                              : user?.avatarUrl !=null? NetworkImage(_getFullUrl(user?.avatarUrl)): null,
-                          child: (_pickedImage == null && user?.name?.isNotEmpty == true && (user?.avatarUrl == null || user!.avatarUrl!.isEmpty))
-                              ? Text(
-                                  user!.name![0].toUpperCase(),
-                                  style: const TextStyle(fontSize: 40, fontWeight: FontWeight.bold, color: Colors.black54),
-                                )
-                              : null,
+                        Container(
+                          width: 128,
+                          height: 128,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: pastel.bg,
+                            border: Border.all(color: Colors.white, width: 4),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.08),
+                                blurRadius: 16,
+                                offset: const Offset(0, 4),
+                              ),
+                            ],
+                          ),
+                          child: ClipOval(
+                            child: _pickedImage != null
+                                ? Image.file(_pickedImage!, fit: BoxFit.cover)
+                                : (user?.avatarUrl != null && user!.avatarUrl!.isNotEmpty)
+                                    ? CachedNetworkImage(
+                                        imageUrl: _getFullUrl(user.avatarUrl),
+                                        fit: BoxFit.cover,
+                                        placeholder: (context, url) => Center(
+                                          child: Text(
+                                            initials,
+                                            style: TextStyle(
+                                              fontSize: 44,
+                                              fontWeight: FontWeight.w700,
+                                              color: pastel.text,
+                                            ),
+                                          ),
+                                        ),
+                                        errorWidget: (context, url, error) => Center(
+                                          child: Text(
+                                            initials,
+                                            style: TextStyle(
+                                              fontSize: 44,
+                                              fontWeight: FontWeight.w700,
+                                              color: pastel.text,
+                                            ),
+                                          ),
+                                        ),
+                                      )
+                                    : Center(
+                                        child: Text(
+                                          initials,
+                                          style: TextStyle(
+                                            fontSize: 44,
+                                            fontWeight: FontWeight.w700,
+                                            color: pastel.text,
+                                          ),
+                                        ),
+                                      ),
+                          ),
                         ),
                         Positioned(
-                          bottom: 0,
-                          right: 0,
+                          bottom: 2,
+                          right: 2,
                           child: Container(
                             padding: const EdgeInsets.all(10),
                             decoration: BoxDecoration(
-                              color: Colors.teal,
+                              color: AppColors.cyanAccent,
                               shape: BoxShape.circle,
                               border: Border.all(color: Colors.white, width: 3),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: AppColors.cyanAccent.withValues(alpha: 0.4),
+                                  blurRadius: 8,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ],
                             ),
                             child: const Icon(
-                              Icons.camera_alt,
+                              Icons.camera_alt_rounded,
                               color: Colors.white,
-                              size: 24,
+                              size: 20,
                             ),
                           ),
                         ),
@@ -205,46 +315,61 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
                     ),
                   ),
                 ),
-                const SizedBox(height: 30),
-                _buildProfileItem(
-                  icon: Icons.person,
-                  title: 'Name',
-                  value: user?.name ?? 'Unknown',
-                  isEditable: true,
-                  onEdit: () {
-                    _showEditDialog('Enter your name', user?.name ?? '', (newValue) {
-                      _updateName(newValue);
-                    });
-                  },
-                ),
-                Padding(
-                  padding: const EdgeInsets.only(left: 72, right: 20),
-                  child: Text(
-                    'This is not your username or pin. This name will be visible to your WhatsApp contacts.',
-                    style: TextStyle(
-                      color: Colors.grey.shade600,
-                      fontSize: 13,
-                    ),
+                const SizedBox(height: 28),
+                Material(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(20),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(20),
+                    side: BorderSide(color: AppColors.neutralColor.shade200),
+                  ),
+                  child: Column(
+                    children: [
+                      _buildProfileItem(
+                        icon: Icons.person_outline_rounded,
+                        title: 'Name',
+                        value: user?.name ?? 'Unknown',
+                        isEditable: true,
+                        onEdit: () {
+                          _showEditDialog('Edit Name', user?.name ?? '', (newValue) {
+                            _updateName(newValue);
+                          });
+                        },
+                      ),
+                      Divider(height: 1, indent: 64, endIndent: 20, color: AppColors.neutralColor.shade100),
+                      _buildProfileItem(
+                        icon: Icons.info_outline_rounded,
+                        title: 'About',
+                        value: user?.bio ?? 'Hey there! I am using WhatsApp.',
+                        isEditable: true,
+                        onEdit: () {
+                          _showEditDialog('Edit About', user?.bio ?? '', (newValue) {
+                            _updateBio(newValue);
+                          });
+                        },
+                      ),
+                      Divider(height: 1, indent: 64, endIndent: 20, color: AppColors.neutralColor.shade100),
+                      _buildProfileItem(
+                        icon: Icons.alternate_email_rounded,
+                        title: 'Email',
+                        value: user?.email ?? 'Not provided',
+                        isEditable: false,
+                      ),
+                    ],
                   ),
                 ),
-                const Divider(indent: 72),
-                _buildProfileItem(
-                  icon: Icons.info_outline,
-                  title: 'About',
-                  value: user?.bio ?? 'Hey there! I am using WhatsApp.',
-                  isEditable: true,
-                  onEdit: () {
-                    _showEditDialog('Add about', user?.bio ?? '', (newValue) {
-                      _updateBio(newValue);
-                    });
-                  },
-                ),
-                const Divider(indent: 72),
-                _buildProfileItem(
-                  icon: Icons.phone,
-                  title: 'Email',
-                  value: user?.email ?? 'Not provided',
-                  isEditable: false,
+                const SizedBox(height: 16),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Text(
+                    'This name and about will be visible to your contacts across chats and groups.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: AppColors.neutralColor.shade500,
+                      fontSize: 12.5,
+                      height: 1.4,
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -262,18 +387,36 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
     VoidCallback? onEdit,
   }) {
     return ListTile(
-      leading: Icon(icon, color: Colors.grey.shade600, size: 28),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      leading: Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          color: AppColors.cyanLight.withValues(alpha: 0.5),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        alignment: Alignment.center,
+        child: Icon(icon, color: AppColors.cyanDark, size: 22),
+      ),
       title: Text(
         title,
-        style: TextStyle(color: Colors.grey.shade600, fontSize: 14),
+        style: TextStyle(
+          color: AppColors.neutralColor.shade500,
+          fontSize: 12.5,
+          fontWeight: FontWeight.w500,
+        ),
       ),
       subtitle: Text(
         value,
-        style: const TextStyle(fontSize: 16, color: Colors.black, fontWeight: FontWeight.w500),
+        style: const TextStyle(
+          fontSize: 15,
+          color: Color(0xFF0F172A),
+          fontWeight: FontWeight.w600,
+        ),
       ),
       trailing: isEditable
           ? IconButton(
-              icon: Icon(Icons.edit, color: Colors.teal.shade700),
+              icon: const Icon(Icons.edit_rounded, color: AppColors.cyanAccent, size: 20),
               onPressed: onEdit,
             )
           : null,
@@ -281,31 +424,65 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
   }
 
   void _showEditDialog(String title, String initialValue, Function(String) onSave) {
-    TextEditingController controller = TextEditingController(text: initialValue);
+    final controller = TextEditingController(text: initialValue);
     showDialog(
       context: context,
       builder: (context) {
         return AlertDialog(
-          title: Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: Text(
+            title,
+            style: const TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+              color: Color(0xFF0F172A),
+            ),
+          ),
           content: TextField(
             controller: controller,
-            decoration: const InputDecoration(
-              focusedBorder: UnderlineInputBorder(
-                borderSide: BorderSide(color: Colors.teal, width: 2),
+            autofocus: true,
+            style: const TextStyle(fontSize: 15, color: Color(0xFF0F172A)),
+            decoration: InputDecoration(
+              filled: true,
+              fillColor: const Color(0xFFF8FAFC),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: AppColors.neutralColor.shade200),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: AppColors.neutralColor.shade200),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: AppColors.cyanAccent, width: 1.8),
               ),
             ),
           ),
+          actionsPadding: const EdgeInsets.only(right: 16, bottom: 16),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel', style: TextStyle(color: Colors.teal)),
+              style: TextButton.styleFrom(
+                foregroundColor: AppColors.neutralColor.shade600,
+              ),
+              child: const Text('Cancel', style: TextStyle(fontWeight: FontWeight.w600)),
             ),
-            TextButton(
+            ElevatedButton(
               onPressed: () {
                 onSave(controller.text);
                 Navigator.pop(context);
               },
-              child: const Text('Save', style: TextStyle(color: Colors.teal)),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.cyanAccent,
+                foregroundColor: Colors.white,
+                elevation: 0,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+              ),
+              child: const Text('Save', style: TextStyle(fontWeight: FontWeight.w700)),
             ),
           ],
         );

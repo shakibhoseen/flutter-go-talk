@@ -16,6 +16,8 @@ import '../../../core/db/network/socket/chat_socket_event_dispatcher.dart';
 import '../../../core/db/network/socket/chat_socket_event_type.dart';
 import '../../../core/db/network/socket/chat_socket_service.dart';
 import '../../../core/session/auth_session.dart';
+import '../../../core/theme/app_colors.dart';
+import '../../../core/widgets/cute_avatar.dart';
 import '../../../gen/assets.gen.dart';
 import '../../home/model/conversation.dart';
 import '../../call/presentation/call_screen.dart';
@@ -201,46 +203,36 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
 
     if (!isSeenEvent && !isDeliveredEvent) return;
 
-    final items =
-        inboxBloc?.cursorPageHolder.items ?? [];
+    final items = inboxBloc?.cursorPageHolder.items ?? [];
+    if (items.isEmpty) return;
 
     var changed = false;
 
-    for (final item in items) {
-      if (!item.isMine) continue;
+    final updated = items.map((item) {
+      if (!item.isMine) return item;
 
       final currentId = int.tryParse(item.id) ?? 0;
 
-      if (currentId > targetId) continue;
+      if (currentId <= 0 || currentId > targetId) return item;
 
       if (isSeenEvent && !item.isSeen) {
-        inboxBloc?.upsertLocalItem(
-          item.copyWith(
-            isSeen: true,
-            isDelivered: true,
-          ),
-          emitState: false,
-        );
-
         changed = true;
-      } else if (
-      isDeliveredEvent &&
-          !item.isDelivered &&
-          !item.isSeen
-      ) {
-        inboxBloc?.upsertLocalItem(
-          item.copyWith(
-            isDelivered: true,
-          ),
-          emitState: false,
+        return item.copyWith(
+          isSeen: true,
+          isDelivered: true,
         );
-
+      } else if (isDeliveredEvent && !item.isDelivered && !item.isSeen) {
         changed = true;
+        return item.copyWith(
+          isDelivered: true,
+        );
       }
-    }
+
+      return item;
+    }).toList();
 
     if (changed) {
-      inboxBloc?.emitCurrentLocalData();
+      inboxBloc?.replaceLocalItems(updated, emitState: true);
     }
   }
 
@@ -304,29 +296,48 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
   Widget build(BuildContext context) {
     if (inboxBloc == null) return const SizedBox();
     return Scaffold(
+      backgroundColor: const Color(0xFFF8FAFC),
       appBar: AppBar(
         titleSpacing: 0,
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0.5,
         title: Row(
           children: [
-            CircleAvatar(
-              radius: 18,
-              backgroundImage: conversationArgs?.avatarUrl != null
-                  ? NetworkImage(_getFullUrl(conversationArgs!.avatarUrl))
-                  : null,
-              child: conversationArgs?.avatarUrl == null
-                  ? Icon(
-                      conversationArgs?.isGroup == true
-                          ? Icons.groups
-                          : Icons.person,
-                    )
-                  : null,
+            CuteAvatar(
+              name: conversationArgs?.displayTitle ?? '',
+              imageUrl: conversationArgs?.avatarUrl,
+              isGroup: conversationArgs?.isGroup == true,
+              isOnline: conversationArgs?.isGroup != true,
+              size: 38,
             ),
             const SizedBox(width: 10),
             Expanded(
-              child: Text(
-                conversationArgs?.displayTitle ?? '',
-                style: const TextStyle(fontSize: 16),
-                overflow: TextOverflow.ellipsis,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    conversationArgs?.displayTitle ?? '',
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF0F172A),
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 1),
+                  Text(
+                    conversationArgs?.isGroup == true ? 'group' : 'online',
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w500,
+                      color: conversationArgs?.isGroup == true
+                          ? AppColors.neutralColor.shade400
+                          : AppColors.onlineGreen,
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
@@ -334,15 +345,18 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
         actions: [
           if (conversationArgs?.isGroup == true)
             PopupMenuButton<String>(
-              onSelected: (value) {
+              onSelected: (value) async {
                 if (value == 'group_info') {
-                  Navigator.push(
+                  final result = await Navigator.push(
                     context,
                     MaterialPageRoute(
                       builder: (context) =>
                           GroupInfoScreen(conversation: conversationArgs!),
                     ),
                   );
+                  if (result == true && context.mounted) {
+                    Navigator.pop(context);
+                  }
                 }
               },
               itemBuilder: (context) => [
@@ -443,10 +457,11 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
         height: double.infinity,
         width: double.infinity,
         decoration: BoxDecoration(
-          color: Colors.green.shade200,
+          color: const Color(0xFFF8FAFC),
           image: DecorationImage(
             image: AssetImage(Assets.lightBg.path),
             fit: BoxFit.cover,
+            opacity: 0.08,
           ),
         ),
         child: Column(
@@ -462,7 +477,7 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
                 return Expanded(
                   child: ListView.builder(
                     reverse: true,
-                    padding: const EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.only(bottom: 8, top: 8),
                     controller: cursorScrollController?.controller,
                     itemCount: data.length,
                     itemBuilder: (context, index) {
@@ -474,85 +489,67 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
                           ? data.elementAt(index - 1)
                           : null;
 
-                      // Profile visibility logic (only applicable for group chats)
-                      bool showProfile = false;
-                      if (isGroup && !newModel.isMine) {
-                        if (newerModel == null) {
-                          // This is the absolute newest message in the whole chat
-                          showProfile = true;
-                        } else if (newerModel.senderId != newModel.senderId) {
-                          // The message below is from a different sender
-                          showProfile = true;
-                        } else {
-                          // Same sender below. Check time gap.
-                          // If gap is medium or big (>= 10 minutes), show profile here too.
-                          final gap =
-                              (newModel.sentAt.millisecondsSinceEpoch -
-                                      newerModel.sentAt.millisecondsSinceEpoch)
-                                  .abs();
-                          if (gap >= 600000) {
-                            showProfile = true;
-                          }
-                        }
-                      }
-
-                      // Oldest message edge case
-                      if (index + 1 == data.length) {
-                        return designMessage(
-                          newModel,
-                          _resendMessage,
-                          false,
-                          // isCompare
-                          0,
-                          // before (time)
-                          true,
-                          // todayIndicator
-                          isGroup ? !newModel.isMine : false,
-                          // showSenderName (top message shows name only in groups)
-                          showProfile,
-                          isGroup,
-                          readBy: inboxBloc?.getWatermarkUsers(newModel.id),
-                          readCount: inboxBloc?.getWatermarkCount(newModel.id),
-                        );
-                      }
-
                       // Older message (the one above this message on the screen)
-                      final oldModel = data.elementAt(index + 1);
+                      final oldModel = index + 1 < data.length
+                          ? data.elementAt(index + 1)
+                          : null;
 
-                      bool todayIndicator = false;
-                      bool showSenderName = false;
-
-                      if (isGroup && !newModel.isMine) {
-                        if (oldModel.senderId != newModel.senderId) {
-                          showSenderName = true;
-                        } else {
-                          // Same sender, but check if there's a large time gap
-                          final gap =
-                              (oldModel.sentAt.millisecondsSinceEpoch -
-                                      newModel.sentAt.millisecondsSinceEpoch)
-                                  .abs();
-                          if (gap >= 600000) {
-                            // 10 minutes
-                            showSenderName = true;
-                          }
-                        }
+                      bool hasOlderSameSender = false;
+                      if (oldModel != null) {
+                        final gapOlder = (newModel.sentAt.millisecondsSinceEpoch -
+                                oldModel.sentAt.millisecondsSinceEpoch)
+                            .abs();
+                        final sameDay = oldModel.timeStamp?.dateCompare ==
+                            newModel.timeStamp?.dateCompare;
+                        hasOlderSameSender = oldModel.senderId == newModel.senderId &&
+                            gapOlder < 600000 &&
+                            sameDay;
                       }
 
-                      if (oldModel.timeStamp?.dateCompare !=
-                          newModel.timeStamp?.dateCompare) {
-                        todayIndicator = true;
+                      bool hasNewerSameSender = false;
+                      if (newerModel != null) {
+                        final gapNewer = (newModel.sentAt.millisecondsSinceEpoch -
+                                newerModel.sentAt.millisecondsSinceEpoch)
+                            .abs();
+                        final sameDay = newerModel.timeStamp?.dateCompare ==
+                            newModel.timeStamp?.dateCompare;
+                        hasNewerSameSender = newerModel.senderId == newModel.senderId &&
+                            gapNewer < 600000 &&
+                            sameDay;
                       }
+
+                      BubblePosition position = BubblePosition.single;
+                      if (!hasOlderSameSender && hasNewerSameSender) {
+                        position = BubblePosition.first;
+                      } else if (hasOlderSameSender && hasNewerSameSender) {
+                        position = BubblePosition.middle;
+                      } else if (hasOlderSameSender && !hasNewerSameSender) {
+                        position = BubblePosition.last;
+                      }
+
+                      // Profile visibility: only on the last message of the sequence (or single)
+                      final showProfile = isGroup && !newModel.isMine && !hasNewerSameSender;
+
+                      // Sender name: only on the first message of the sequence (or single)
+                      final showSenderName = isGroup && !newModel.isMine && !hasOlderSameSender;
+
+                      // Date indicator: if day changed or oldest message
+                      final todayIndicator = oldModel == null ||
+                          oldModel.timeStamp?.dateCompare !=
+                              newModel.timeStamp?.dateCompare;
 
                       return designMessage(
                         newModel,
                         _resendMessage,
-                        true,
-                        // isCompare
-                        oldModel.sentAt.millisecondsSinceEpoch,
+                        oldModel != null,
+                        oldModel?.sentAt.millisecondsSinceEpoch ?? 0,
                         todayIndicator,
                         showSenderName,
                         showProfile,
                         isGroup,
+                        position: position,
+                        isSameSenderAbove: oldModel != null &&
+                            oldModel.senderId == newModel.senderId,
                         readBy: inboxBloc?.getWatermarkUsers(newModel.id),
                         readCount: inboxBloc?.getWatermarkCount(newModel.id),
                       );
@@ -562,23 +559,80 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
               },
             ),
 
-            SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.all(8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                border: Border(
+                  top: BorderSide(
+                    color: AppColors.neutralColor.shade100,
+                    width: 1.0,
+                  ),
+                ),
+              ),
+              child: SafeArea(
+                top: false,
                 child: Row(
                   children: [
                     Expanded(
-                      child: TextField(
-                        controller: _controller,
-                        decoration: const InputDecoration(
-                          hintText: 'Message',
-                          filled: true,
-                          fillColor: Colors.white,
+                      child: Container(
+                        height: 46,
+                        decoration: BoxDecoration(
+                          color: AppColors.neutralColor.shade100,
+                          borderRadius: BorderRadius.circular(24),
                         ),
-                        onSubmitted: (_) => _send(),
+                        child: Row(
+                          children: [
+                            const SizedBox(width: 14),
+                            Expanded(
+                              child: TextField(
+                                controller: _controller,
+                                style: TextStyle(
+                                  fontSize: 14.5,
+                                  color: AppColors.neutralColor.shade900,
+                                ),
+                                decoration: InputDecoration(
+                                  isCollapsed: true,
+                                  hintText: 'Type a message...',
+                                  hintStyle: TextStyle(
+                                    fontSize: 14.5,
+                                    color: AppColors.neutralColor.shade400,
+                                  ),
+                                  border: InputBorder.none,
+                                  enabledBorder: InputBorder.none,
+                                  focusedBorder: InputBorder.none,
+                                ),
+                                onSubmitted: (_) => _send(),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-                    IconButton(icon: const Icon(Icons.send), onPressed: _send),
+                    const SizedBox(width: 8),
+                    Container(
+                      width: 44,
+                      height: 44,
+                      decoration: BoxDecoration(
+                        color: AppColors.cyanAccent,
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                            color: AppColors.cyanAccent.withValues(alpha: 0.35),
+                            blurRadius: 6,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: IconButton(
+                        icon: const Icon(
+                          Icons.send_rounded,
+                          color: Colors.white,
+                          size: 20,
+                        ),
+                        onPressed: _send,
+                      ),
+                    ),
                   ],
                 ),
               ),

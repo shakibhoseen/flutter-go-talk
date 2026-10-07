@@ -7,16 +7,9 @@ import '../model/chat_message.dart';
 import '../model/chat_user.dart';
 import '../model/conversation.dart';
 import 'chat_repository.dart';
-import 'fake_chat_repository.dart';
-
-/// Conversations and message history come from the real backend now.
-/// Users-to-start-a-chat-with doesn't have an endpoint yet, so that one
-/// still falls back to [FakeChatRepository] — point it at a real one the
-/// day it exists; nothing above this layer needs to change.
+/// Conversations, message history, and users list come from the real chat backend.
 class HttpChatRepository implements ChatRepository {
   const HttpChatRepository();
-
-  static const _fallback = FakeChatRepository();
 
   @override
   Future<List<Conversation>> getConversations() async {
@@ -43,7 +36,32 @@ class HttpChatRepository implements ChatRepository {
   }
 
   @override
-  Future<List<ChatUser>> getAllUsers() => _fallback.getAllUsers();
+  Future<List<ChatUser>> getAllUsers() async {
+    final response = await GlobalDataApi.instance.getResponse(
+      url: ChatEndpoints.users(),
+    );
+    final list = _asMap(response)?['users'];
+    if (list is! List) return const [];
+
+    return list
+        .whereType<Map>()
+        .map((json) => ChatUser.fromJson(Map<String, dynamic>.from(json)))
+        .toList();
+  }
+
+  @override
+  Future<String> getOrCreateDirectConversation(int targetUserId) async {
+    final response = await GlobalDataApi.instance.postResponse(
+      url: ChatEndpoints.directConversation(),
+      data: {'target_user_id': targetUserId},
+    );
+    final map = _asMap(response);
+    final convId = map?['conversation_id']?.toString();
+    if (convId == null || convId.isEmpty) {
+      throw Exception('Failed to get conversation ID from server');
+    }
+    return convId;
+  }
 
   @override
   Future<CursorPaginationResponse<ChatMessage>> getMessages(
