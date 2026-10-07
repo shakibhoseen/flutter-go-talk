@@ -18,4 +18,6 @@ final class ChatEndpoints {
 
   static String conversationMember(String conversationId, int userId) =>
       'conversations/$conversationId/members/$userId';
+
+  static String presence() => 'presence';
 }

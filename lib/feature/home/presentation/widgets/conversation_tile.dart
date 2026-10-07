@@ -45,7 +45,7 @@ class ConversationTile extends StatelessWidget {
               name: conversation.displayTitle,
               imageUrl: conversation.avatarUrl,
               isGroup: conversation.isGroup,
-              isOnline: false,
+              isOnline: !conversation.isGroup && conversation.isOnline,
               size: 50,
             ),
             const SizedBox(width: 14),

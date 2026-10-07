@@ -58,6 +58,11 @@ class ChatViewModel {
   bool _isRefreshingConversations = false;
   bool get isRefreshingConversations => _isRefreshingConversations;
 
+  @visibleForTesting
+  void handleSocketEventForTesting(Map<String, dynamic> event) {
+    _handleSocketEvent(event);
+  }
+
   void _handleSocketEvent(Map<String, dynamic> event) {
     switch (event['type']) {
       case 'new_message':
@@ -69,6 +74,49 @@ class ChatViewModel {
       case 'call_offer':
         _handleIncomingCall(event['payload']);
         break;
+      case 'user_presence':
+        _handleUserPresence(event['payload']);
+        break;
+    }
+  }
+
+  void _handleUserPresence(dynamic payload) {
+    if (payload is! Map) return;
+    final json = Map<String, dynamic>.from(payload);
+    final rawUserId = json['user_id'];
+    final userId = rawUserId?.toString() ?? '';
+    final isOnline = json['is_online'] as bool? ?? false;
+    if (userId.isEmpty) return;
+
+    final usersState = allUsersBloc.state;
+    if (usersState is SuccessState<List<ChatUser>>) {
+      var changed = false;
+      final updated = usersState.data.map((u) {
+        if (u.id == userId && u.isOnline != isOnline) {
+          changed = true;
+          return u.copyWith(isOnline: isOnline);
+        }
+        return u;
+      }).toList();
+      if (changed) {
+        allUsersBloc.emitSuccess(updated);
+      }
+    }
+
+    final convsState = conversationsBloc.state;
+    if (convsState is SuccessState<List<Conversation>>) {
+      final parsedUid = int.tryParse(userId);
+      var changed = false;
+      final updated = convsState.data.map((c) {
+        if (!c.isGroup && c.otherUserId == parsedUid && c.isOnline != isOnline) {
+          changed = true;
+          return c.copyWith(isOnline: isOnline);
+        }
+        return c;
+      }).toList();
+      if (changed) {
+        conversationsBloc.emitSuccess(updated);
+      }
     }
   }
 

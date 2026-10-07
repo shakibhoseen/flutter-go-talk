@@ -16,6 +16,7 @@ class Conversation extends BaseModel {
     this.lastMessageAt,
     this.unreadCount = 0,
     this.otherUserId,
+    this.isOnline = false,
     required this.createdAt,
   });
 
@@ -29,6 +30,7 @@ class Conversation extends BaseModel {
   final DateTime? lastMessageAt;
   final int unreadCount;
   final int? otherUserId;
+  final bool isOnline;
   final DateTime createdAt;
 
   bool get isGroup => type.toLowerCase() == 'group';
@@ -49,6 +51,7 @@ class Conversation extends BaseModel {
       lastMessageAt: DateTime.tryParse(json['last_message_at'] as String? ?? ''),
       unreadCount: json['unread_count'] as int? ?? 0,
       otherUserId: json['other_user_id'] as int?,
+      isOnline: json['is_online'] as bool? ?? false,
       createdAt:
           DateTime.tryParse(json['created_at'] as String? ?? '') ??
           DateTime.now(),
@@ -66,6 +69,8 @@ class Conversation extends BaseModel {
       'last_message_sender_id': lastMessageSenderId,
       'last_message_at': lastMessageAt?.toIso8601String(),
       'unread_count': unreadCount,
+      'other_user_id': otherUserId,
+      'is_online': isOnline,
       'created_at': createdAt.toIso8601String(),
     };
   }
@@ -83,6 +88,7 @@ class Conversation extends BaseModel {
     DateTime? lastMessageAt,
     int? unreadCount,
     int? otherUserId,
+    bool? isOnline,
     DateTime? createdAt,
   }) {
     return Conversation(
@@ -96,6 +102,7 @@ class Conversation extends BaseModel {
       lastMessageAt: lastMessageAt ?? this.lastMessageAt,
       unreadCount: unreadCount ?? this.unreadCount,
       otherUserId: otherUserId ?? this.otherUserId,
+      isOnline: isOnline ?? this.isOnline,
       createdAt: createdAt ?? this.createdAt,
     );
   }

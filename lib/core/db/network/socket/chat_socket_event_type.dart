@@ -8,6 +8,7 @@ abstract final class ChatSocketEventType {
   static const memberReadWatermark = 'member_read_watermark';
 
   static const typing = 'typing';
+  static const userPresence = 'user_presence';
 
   static const callOffer = 'call_offer';
   static const callAnswer = 'call_answer';

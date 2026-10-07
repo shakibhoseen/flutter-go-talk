@@ -45,6 +45,8 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
   VoidCallback? _removeNewMessageListener;
   VoidCallback? _removeStatusUpdatedListener;
   VoidCallback? _removeWatermarkListener;
+  VoidCallback? _removePresenceListener;
+  bool _isOtherUserOnline = false;
 
   String _getFullUrl(String? path) {
     if (path == null || path.isEmpty) return '';
@@ -91,6 +93,7 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
   @override
   void initState() {
     conversationArgs = NavigationService.getArguments<Conversation>();
+    _isOtherUserOnline = conversationArgs?.isOnline ?? false;
     if (conversationArgs?.id != null) {
       inboxBloc = InboxMessageListCursorBloc(
         conversationId: conversationArgs!.id,
@@ -152,6 +155,23 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
       eventType: ChatSocketEventType.memberReadWatermark,
       conversationId: conversationId,
       callback: _handleMemberReadWatermark,
+    );
+
+    _removePresenceListener = _socketDispatcher.listen(
+      eventType: ChatSocketEventType.userPresence,
+      callback: (payload) {
+        if (!mounted) return;
+        final rawUserId = payload['user_id'];
+        final userId = rawUserId is int ? rawUserId : int.tryParse(rawUserId?.toString() ?? '');
+        if (userId != null && conversationArgs?.otherUserId == userId) {
+          final isOnline = payload['is_online'] as bool? ?? false;
+          if (mounted && _isOtherUserOnline != isOnline) {
+            setState(() {
+              _isOtherUserOnline = isOnline;
+            });
+          }
+        }
+      },
     );
   }
 
@@ -286,6 +306,7 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
     _removeNewMessageListener?.call();
     _removeStatusUpdatedListener?.call();
     _removeWatermarkListener?.call();
+    _removePresenceListener?.call();
 
     _blocSubscription?.cancel();
     _controller.dispose();
@@ -308,7 +329,7 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
               name: conversationArgs?.displayTitle ?? '',
               imageUrl: conversationArgs?.avatarUrl,
               isGroup: conversationArgs?.isGroup == true,
-              isOnline: conversationArgs?.isGroup != true,
+              isOnline: conversationArgs?.isGroup != true && _isOtherUserOnline,
               size: 38,
             ),
             const SizedBox(width: 10),
@@ -328,13 +349,17 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
                   ),
                   const SizedBox(height: 1),
                   Text(
-                    conversationArgs?.isGroup == true ? 'group' : 'online',
+                    conversationArgs?.isGroup == true
+                        ? 'group'
+                        : (_isOtherUserOnline ? 'online' : 'offline'),
                     style: TextStyle(
                       fontSize: 11.5,
                       fontWeight: FontWeight.w500,
                       color: conversationArgs?.isGroup == true
                           ? AppColors.neutralColor.shade400
-                          : AppColors.onlineGreen,
+                          : (_isOtherUserOnline
+                              ? AppColors.onlineGreen
+                              : AppColors.neutralColor.shade400),
                     ),
                   ),
                 ],
