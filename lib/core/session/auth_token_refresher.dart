@@ -2,13 +2,18 @@ import 'dart:async';
 import 'dart:developer';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 
-import '../db/network/auth_endpoints.dart';
-import '../db/network/network_base_url_resolver.dart';
 import '../db/network/network_service_type.dart';
 import '../config/app_flavor_config.dart';
 import '../../feature/login/model/login_response.dart';
 import 'auth_session.dart';
+
+enum TokenRefreshResult {
+  success,
+  invalidToken,
+  networkError,
+}
 
 /// Trades the refresh token for a new access token.
 ///
@@ -20,7 +25,10 @@ final class AuthTokenRefresher {
 
   static final AuthTokenRefresher instance = AuthTokenRefresher._();
 
-  Future<bool>? _inFlight;
+  @visibleForTesting
+  static Dio Function()? dioFactory;
+
+  Future<TokenRefreshResult>? _inFlight;
 
   /// True when the session now holds a usable access token.
   ///
@@ -28,7 +36,7 @@ final class AuthTokenRefresher {
   /// 401s at once, and four refreshes would race — the last one wins and the
   /// other three tokens are already revoked, signing the user out mid-screen.
   /// They all await the same attempt instead.
-  Future<bool> refresh() {
+  Future<TokenRefreshResult> refresh() {
     final inFlight = _inFlight;
     if (inFlight != null) {
       return inFlight;
@@ -41,42 +49,44 @@ final class AuthTokenRefresher {
     });
   }
 
-  Future<bool> _refresh() async {
+  Future<TokenRefreshResult> _refresh() async {
     final refreshToken = AuthSession.tokens?.refreshToken ?? '';
     if (refreshToken.isEmpty) {
       log('no refresh token to trade', name: 'AuthTokenRefresher');
-      return false;
+      return TokenRefreshResult.invalidToken;
     }
 
     // Logged by hand rather than through the shared `Logger` interceptor: the
     // request body *is* the refresh token, and the interceptor prints bodies.
     log('access token rejected, refreshing…', name: 'AuthTokenRefresher');
-    
+
     try {
-      final dio = Dio(
-        BaseOptions(
-          baseUrl: AppFlavorConfig.baseUrlFor(NetworkServiceType.auth),
-          responseType: ResponseType.json,
-          connectTimeout: const Duration(seconds: 30),
-          receiveTimeout: const Duration(seconds: 30),
-          headers: const {'Accept': 'application/json'},
-        ),
-      );
+      final dio = dioFactory?.call() ??
+          Dio(
+            BaseOptions(
+              baseUrl: AppFlavorConfig.baseUrlFor(NetworkServiceType.auth),
+              responseType: ResponseType.json,
+              connectTimeout: const Duration(seconds: 30),
+              receiveTimeout: const Duration(seconds: 30),
+              headers: const {'Accept': 'application/json'},
+            ),
+          );
       final response = await dio.post(
         'auth/refresh',
         data: {'refresh_token': refreshToken},
       );
-    
+
       final body = response.data;
       final data = body is Map ? body : null;
       if (data is! Map) {
         log('refresh response had no data block', name: 'AuthTokenRefresher');
-        return false;
+        return TokenRefreshResult.networkError;
       }
-    
+
       final refreshed = LoginResponse.fromJson(Map<String, dynamic>.from(data));
       if (!refreshed.hasTokens) {
-        return false;
+        log('refresh response missing token fields', name: 'AuthTokenRefresher');
+        return TokenRefreshResult.networkError;
       }
       // The server rotates the refresh token too, so the whole pair is
       // replaced — keeping the old one would fail the next refresh.
@@ -85,10 +95,32 @@ final class AuthTokenRefresher {
         'refreshed successfully',
         name: 'AuthTokenRefresher',
       );
-      return true;
+      return TokenRefreshResult.success;
+    } on DioException catch (error) {
+      log('refresh dio error: $error', name: 'AuthTokenRefresher');
+      final statusCode = error.response?.statusCode;
+      if (statusCode != null) {
+        if (statusCode == 401) {
+          return TokenRefreshResult.invalidToken;
+        }
+        return TokenRefreshResult.networkError;
+      }
+
+      switch (error.type) {
+        case DioExceptionType.connectionTimeout:
+        case DioExceptionType.sendTimeout:
+        case DioExceptionType.receiveTimeout:
+        case DioExceptionType.connectionError:
+        case DioExceptionType.cancel:
+        case DioExceptionType.badCertificate:
+        case DioExceptionType.badResponse:
+        case DioExceptionType.unknown:
+        default:
+          return TokenRefreshResult.networkError;
+      }
     } catch (error) {
       log('refresh failed: $error', name: 'AuthTokenRefresher');
-      return false;
+      return TokenRefreshResult.networkError;
     }
   }
 }

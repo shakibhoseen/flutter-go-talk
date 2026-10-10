@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer';
 
 import 'auth_session.dart';
 import 'auth_session_store.dart';
@@ -33,10 +34,17 @@ final class AuthBootstrap {
     }
 
     unawaited(
-      AuthTokenRefresher.instance.refresh().then((renewed) {
-        if (!renewed) {
-          AuthSession.clear();
+      AuthTokenRefresher.instance.refresh().then((result) async {
+        if (result == TokenRefreshResult.invalidToken) {
+          await AuthSession.clear();
         }
+      }).catchError((Object error, StackTrace stackTrace) {
+        log(
+          'background token refresh failed: $error',
+          error: error,
+          stackTrace: stackTrace,
+          name: 'AuthBootstrap',
+        );
       }),
     );
   }

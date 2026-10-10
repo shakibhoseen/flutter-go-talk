@@ -61,12 +61,12 @@ final class AuthSession {
     signedIn.value = true;
   }
 
-  static void clear() {
+  static Future<void> clear() {
     _tokens = null;
     _accessTokenExpiry = null;
     AuthDioSingleton.instance.update(null);
     DioSingleton.instance.update(null);
     signedIn.value = false;
-    unawaited(AuthSessionStore.clear());
+    return AuthSessionStore.clear();
   }
 }

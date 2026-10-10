@@ -45,10 +45,14 @@ class AuthRefreshInterceptor extends Interceptor {
       return;
     }
 
-    final refreshed = await AuthTokenRefresher.instance.refresh();
-    if (!refreshed) {
-      AuthSession.clear();
+    final result = await AuthTokenRefresher.instance.refresh();
+    if (result == TokenRefreshResult.invalidToken) {
+      await AuthSession.clear();
       onSessionExpired?.call();
+      handler.next(err);
+      return;
+    }
+    if (result == TokenRefreshResult.networkError) {
       handler.next(err);
       return;
     }
