@@ -26,6 +26,16 @@ class InboxMessageListCursorBloc
   final Set<int>? groupMemberIds;
   final LocalOutboxStorage outboxStorage;
   final ChatMessageCache messageCache;
+  final ChatSocketService socketService;
+
+  final Map<String, int> _pendingDeliveredAcks = {};
+  final Set<String> _deliveredAckedMessageIds = {};
+
+  @visibleForTesting
+  Map<String, int> get pendingDeliveredAcks => Map.unmodifiable(_pendingDeliveredAcks);
+
+  @visibleForTesting
+  Set<String> get deliveredAckedMessageIds => Set.unmodifiable(_deliveredAckedMessageIds);
 
   InboxMessageListCursorBloc({
     required this.conversationId,
@@ -34,10 +44,18 @@ class InboxMessageListCursorBloc
     HttpChatRepository? repository,
     LocalOutboxStorage? outboxStorage,
     ChatMessageCache? messageCache,
+    ChatSocketService? socketService,
   })  : repository = repository ?? const HttpChatRepository(),
         outboxStorage = outboxStorage ?? SharedPreferencesOutboxStorage(),
         messageCache = messageCache ?? ChatMessageCache(),
-        super(InitialState());
+        socketService = socketService ?? ChatSocketService.instance,
+        super(InitialState()) {
+    _currentUserScope = this.messageCache.resolveCurrentUserScope();
+    _currentSessionEpoch = this.messageCache.sessionEpoch;
+    try {
+      this.socketService.connectionState.addListener(_onSocketConnectionStateChanged);
+    } catch (_) {}
+  }
 
   @override
   String itemIdentity(ChatMessage item) {
@@ -341,7 +359,10 @@ class InboxMessageListCursorBloc
       emitState: false,
     );
 
-    _persistConfirmedMessages(state.data.extra?['watermarks']);
+    unawaited(_persistConfirmedMessages(state.data.extra?['watermarks']).catchError((e) {
+      log('Failed to persist confirmed messages: $e', name: 'InboxMessageListCursorBloc');
+      return false;
+    }));
 
     final wasInitialLoading = _isInitialLoading;
     _isInitialLoading = false;
@@ -439,7 +460,114 @@ class InboxMessageListCursorBloc
     return result;
   }
 
-  void _persistConfirmedMessages([dynamic watermarks]) {
+  bool _isSessionValid() {
+    final activeScope = messageCache.resolveCurrentUserScope();
+    final activeEpoch = messageCache.sessionEpoch;
+    if (_currentUserScope != null && activeScope != _currentUserScope) {
+      log(
+        'Session scope mismatch ($_currentUserScope != $activeScope), invalidating pending ACKs',
+        name: 'InboxMessageListCursorBloc',
+      );
+      return false;
+    }
+    if (_currentSessionEpoch != null && activeEpoch != _currentSessionEpoch) {
+      log(
+        'Session epoch mismatch ($_currentSessionEpoch != $activeEpoch), invalidating pending ACKs',
+        name: 'InboxMessageListCursorBloc',
+      );
+      return false;
+    }
+    return true;
+  }
+
+  void _onSocketConnectionStateChanged() {
+    if (socketService.isConnected) {
+      if (!_isSessionValid()) {
+        _pendingDeliveredAcks.clear();
+        _deliveredAckedMessageIds.clear();
+        return;
+      }
+      _dispatchPendingDeliveredAcks();
+    }
+  }
+
+  void _dispatchPendingDeliveredAcks() {
+    if (_pendingDeliveredAcks.isEmpty) return;
+    if (!_isSessionValid()) {
+      _pendingDeliveredAcks.clear();
+      _deliveredAckedMessageIds.clear();
+      return;
+    }
+
+    final pending = Map<String, int>.from(_pendingDeliveredAcks);
+    for (final entry in pending.entries) {
+      if (!_isSessionValid()) {
+        _pendingDeliveredAcks.clear();
+        _deliveredAckedMessageIds.clear();
+        return;
+      }
+
+      final msgId = entry.key;
+      final senderId = entry.value;
+
+      try {
+        final sent = socketService.sendDeliveredAck(
+          conversationId: conversationId,
+          messageId: msgId,
+          senderId: senderId,
+        );
+
+        if (sent) {
+          _deliveredAckedMessageIds.add(msgId);
+          _pendingDeliveredAcks.remove(msgId);
+        }
+      } catch (e) {
+        log(
+          'Failed to send delivered ack for msg $msgId: $e',
+          name: 'InboxMessageListCursorBloc',
+        );
+      }
+    }
+  }
+
+  /// Manually flush any pending delivered acknowledgments across the socket.
+  void flushPendingDeliveredAcks() {
+    _dispatchPendingDeliveredAcks();
+  }
+
+  String? get _effectiveUserScope =>
+      _currentUserScope ?? messageCache.resolveCurrentUserScope();
+
+  int? get _currentUserId {
+    final scope = _effectiveUserScope;
+    final parsed = scope != null ? int.tryParse(scope) : null;
+    if (parsed != null && parsed > 0) return parsed;
+    final authId = AuthSession.tokens?.user?.id;
+    if (authId != null) {
+      return int.tryParse(authId.toString());
+    }
+    return null;
+  }
+
+  bool _isMessageFromCurrentUser(ChatMessage msg) {
+    if (msg.isMine) return true;
+    final scope = _effectiveUserScope;
+    if (scope != null && scope.isNotEmpty && msg.senderId == scope) {
+      return true;
+    }
+    final myId = _currentUserId;
+    final senderInt = int.tryParse(msg.senderId);
+    if (myId != null && senderInt != null && senderInt == myId) {
+      return true;
+    }
+    final authUserId = AuthSession.tokens?.user?.id?.toString();
+    if (authUserId != null && authUserId.isNotEmpty && msg.senderId == authUserId) {
+      return true;
+    }
+    return false;
+  }
+
+  Future<bool> _persistConfirmedMessages([dynamic watermarks]) async {
     final confirmed = cursorPageHolder.items
         .where((m) => m.id.isNotEmpty && m.id != '0')
         .take(50)
@@ -449,16 +577,15 @@ class InboxMessageListCursorBloc
       final exported = exportWatermarksJson();
       final effectiveWatermarks =
           watermarks ?? (exported.isNotEmpty ? exported : null);
-      unawaited(
-        messageCache.saveMessages(
-          conversationId: conversationId,
-          messages: confirmed,
-          watermarks: effectiveWatermarks,
-          targetUserScope: _currentUserScope ?? messageCache.resolveCurrentUserScope(),
-          sessionEpoch: _currentSessionEpoch ?? messageCache.sessionEpoch,
-        ),
+      return await messageCache.saveMessages(
+        conversationId: conversationId,
+        messages: confirmed,
+        watermarks: effectiveWatermarks,
+        targetUserScope: _currentUserScope ?? messageCache.resolveCurrentUserScope(),
+        sessionEpoch: _currentSessionEpoch ?? messageCache.sessionEpoch,
       );
     }
+    return true;
   }
 
   void _reconcileOutboxFromIncoming(List<ChatMessage>? incoming) {
@@ -705,7 +832,10 @@ class InboxMessageListCursorBloc
       emitState: true,
     );
 
-    _persistConfirmedMessages();
+    unawaited(_persistConfirmedMessages().catchError((e) {
+      log('Failed to persist confirmed messages: $e', name: 'InboxMessageListCursorBloc');
+      return false;
+    }));
   }
 
   /// Reconciles incoming delivery or seen status from WebSocket `status_updated`
@@ -747,7 +877,10 @@ class InboxMessageListCursorBloc
 
     if (changed) {
       replaceLocalItems(updated, emitState: true);
-      _persistConfirmedMessages();
+      unawaited(_persistConfirmedMessages().catchError((e) {
+        log('Failed to persist confirmed messages: $e', name: 'InboxMessageListCursorBloc');
+        return false;
+      }));
     }
     return changed;
   }
@@ -760,10 +893,22 @@ class InboxMessageListCursorBloc
   void clearLocalItems({bool resetPaginationState = false}) {
     userLastMessageSeenID.clear();
     userProfiles.clear();
+    _pendingDeliveredAcks.clear();
+    _deliveredAckedMessageIds.clear();
     _isInitialLoading = false;
     _hasInitialLoaded = false;
     _initialHydrationFuture = null;
     super.clearLocalItems(resetPaginationState: resetPaginationState);
+  }
+
+  @override
+  Future<void> close() {
+    try {
+      socketService.connectionState.removeListener(_onSocketConnectionStateChanged);
+    } catch (_) {}
+    _pendingDeliveredAcks.clear();
+    _deliveredAckedMessageIds.clear();
+    return super.close();
   }
 
 
@@ -848,8 +993,8 @@ class InboxMessageListCursorBloc
     upsertLocalItem(optimisticMessage, insertAtStart: true, emitState: true);
 
     // 4. Transmit over WebSocket only if connected; otherwise keeps pending in outbox
-    if (ChatSocketService.instance.isConnected) {
-      ChatSocketService.instance.sendMessage(
+    if (socketService.isConnected) {
+      socketService.sendMessage(
         conversationId: conversationId,
         content: content,
         clientMessageId: effectiveClientMessageId,
@@ -882,7 +1027,7 @@ class InboxMessageListCursorBloc
       emitState: true,
     );
 
-    _persistConfirmedMessages();
+    await _persistConfirmedMessages();
   }
 
   /// Returns the highest message ID currently loaded in memory.
@@ -911,6 +1056,15 @@ class InboxMessageListCursorBloc
       return false;
     }
 
+    _currentUserScope ??= messageCache.resolveCurrentUserScope();
+    _currentSessionEpoch ??= messageCache.sessionEpoch;
+
+    if (!_isSessionValid()) {
+      _pendingDeliveredAcks.clear();
+      _deliveredAckedMessageIds.clear();
+      return false;
+    }
+
     final startSinceId = latestMessageId;
     if (startSinceId == null) {
       if (!_hasInitialLoaded) {
@@ -925,16 +1079,29 @@ class InboxMessageListCursorBloc
     }
 
     _isSyncingMissedMessages = true;
+    final messagesToAck = <String, int>{};
     try {
       int? currentSinceId = startSinceId;
       bool hasMore = true;
 
       while (hasMore && currentSinceId != null) {
+        if (!_isSessionValid()) {
+          _pendingDeliveredAcks.clear();
+          _deliveredAckedMessageIds.clear();
+          return false;
+        }
+
         final response = await repository.getMessages(
           conversationId,
           limit: 50,
           sinceId: currentSinceId,
         );
+
+        if (!_isSessionValid()) {
+          _pendingDeliveredAcks.clear();
+          _deliveredAckedMessageIds.clear();
+          return false;
+        }
 
         // 1. Monotonically update watermarks from this page
         extractWaterMark(response.extra?['watermarks']);
@@ -954,6 +1121,16 @@ class InboxMessageListCursorBloc
               );
             }
             await reconcileServerMessage(msg, emitState: false);
+
+            if (!_isMessageFromCurrentUser(msg) &&
+                msg.id.isNotEmpty &&
+                msg.id != '0' &&
+                !msg.isDelivered &&
+                !msg.isSeen &&
+                !_deliveredAckedMessageIds.contains(msg.id) &&
+                !_pendingDeliveredAcks.containsKey(msg.id)) {
+              messagesToAck[msg.id] = senderId;
+            }
           }
         }
 
@@ -981,6 +1158,12 @@ class InboxMessageListCursorBloc
         currentSinceId = nextId;
       }
 
+      if (!_isSessionValid()) {
+        _pendingDeliveredAcks.clear();
+        _deliveredAckedMessageIds.clear();
+        return false;
+      }
+
       // Ensure local messages remain sorted strictly newest (index 0) -> oldest
       cursorPageHolder.items.sort((a, b) {
         final idA = int.tryParse(a.id);
@@ -997,7 +1180,25 @@ class InboxMessageListCursorBloc
         emitState: true,
       );
 
-      _persistConfirmedMessages();
+      // 4. Durably persist confirmed messages BEFORE sending delivery ACKs
+      final persisted = await _persistConfirmedMessages();
+      if (!persisted) {
+        log(
+          'Persistence aborted or failed, skipping delivery ACK dispatch',
+          name: 'InboxMessageListCursorBloc',
+        );
+        return false;
+      }
+
+      if (!_isSessionValid()) {
+        _pendingDeliveredAcks.clear();
+        _deliveredAckedMessageIds.clear();
+        return false;
+      }
+
+      // 5. Stage and dispatch delivery ACKs only after durable persistence
+      _pendingDeliveredAcks.addAll(messagesToAck);
+      _dispatchPendingDeliveredAcks();
 
       return true;
     } catch (e, stackTrace) {

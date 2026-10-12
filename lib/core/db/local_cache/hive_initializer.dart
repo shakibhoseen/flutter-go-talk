@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:hive_flutter/hive_flutter.dart';
@@ -42,7 +43,16 @@ class HiveInitializer {
       if (customPath != null) {
         Hive.init(customPath);
       } else {
-        await Hive.initFlutter();
+        try {
+          await Hive.initFlutter();
+        } catch (_) {
+          if (!kIsWeb && Platform.environment.containsKey('FLUTTER_TEST')) {
+            final tempDir = Directory.systemTemp.createTempSync('hive_test_fallback_');
+            Hive.init(tempDir.path);
+          } else {
+            rethrow;
+          }
+        }
       }
       _pendingAdapters.forEach(_register);
       _pendingAdapters.clear();

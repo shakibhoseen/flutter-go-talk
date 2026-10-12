@@ -176,6 +176,7 @@ void main() {
 
       // Trigger initial load
       bloc.execute(pageFromStart: true);
+      await bloc.initialHydrationFuture;
       await pumpEventQueue();
 
       // The server-confirmed message must be removed; the unresolved one must remain

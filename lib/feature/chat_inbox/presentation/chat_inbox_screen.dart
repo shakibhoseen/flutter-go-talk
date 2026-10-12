@@ -264,6 +264,7 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
   void dispose() {
     if (inboxBloc != null) {
       ChatSyncCoordinator.instance.unregisterActiveBloc(inboxBloc!);
+      inboxBloc?.close();
     }
     _removeNewMessageListener?.call();
     _removeStatusUpdatedListener?.call();

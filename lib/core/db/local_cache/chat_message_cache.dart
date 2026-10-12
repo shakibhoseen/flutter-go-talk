@@ -16,6 +16,9 @@ class ChatMessageCache {
 
   ChatMessageCache._internal();
 
+  @visibleForTesting
+  ChatMessageCache.testInstance() : this._internal();
+
   /// Scopes cache keys to the authenticated user ID so User A never sees
   /// User B's cached messages upon account switching.
   @visibleForTesting
@@ -85,7 +88,9 @@ class ChatMessageCache {
   }
 
   /// Persists confirmed messages and optional watermarks for a conversation.
-  Future<void> saveMessages({
+  /// Returns `true` if the messages were successfully written to disk, or `false`
+  /// if aborted due to closed box, session epoch mismatch, or user scope mismatch.
+  Future<bool> saveMessages({
     required String conversationId,
     required List<ChatMessage> messages,
     dynamic watermarks,
@@ -96,7 +101,7 @@ class ChatMessageCache {
     await _coordinatePendingClear();
     await _ensureInitialized();
     final box = _box;
-    if (box == null || !box.isOpen) return;
+    if (box == null || !box.isOpen) return false;
 
     final effectiveUserScope = targetUserScope ?? resolveCurrentUserScope();
 
@@ -106,14 +111,14 @@ class ChatMessageCache {
         'Aborting saveMessages: session epoch mismatch ($sessionEpoch != $_sessionEpoch)',
         name: 'ChatMessageCache',
       );
-      return;
+      return false;
     }
     if (resolveCurrentUserScope() != effectiveUserScope) {
       log(
         'Aborting saveMessages: user scope mismatch ($effectiveUserScope != ${resolveCurrentUserScope()})',
         name: 'ChatMessageCache',
       );
-      return;
+      return false;
     }
 
     final key = _generateKey(conversationId, effectiveUserScope);
@@ -140,6 +145,7 @@ class ChatMessageCache {
     };
 
     await box.put(key, jsonEncode(payload));
+    return true;
   }
 
   /// Persists a pending seen ACK that needs to be retried on reconnect.

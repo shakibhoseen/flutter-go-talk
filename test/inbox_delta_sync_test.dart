@@ -1,8 +1,107 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:whatsapp_flutter_go/core/db/local_cache/chat_message_cache.dart';
+import 'package:whatsapp_flutter_go/core/db/network/socket/chat_socket_service.dart';
+import 'package:whatsapp_flutter_go/core/session/auth_session.dart';
 import 'package:whatsapp_flutter_go/core/state/cursor/cursor_pagination_response.dart';
 import 'package:whatsapp_flutter_go/feature/chat_inbox/data/inbox_message_list_cursor_bloc.dart';
 import 'package:whatsapp_flutter_go/feature/home/data/http_chat_repository.dart';
 import 'package:whatsapp_flutter_go/feature/home/model/chat_message.dart';
+import 'package:whatsapp_flutter_go/feature/login/model/login_response.dart';
+
+class MockTestChatSocketService extends ChatSocketService {
+  MockTestChatSocketService({bool connected = true}) : super.testInstance() {
+    connectionState.value =
+        connected ? SocketConnectionState.connected : SocketConnectionState.disconnected;
+  }
+
+  final List<Map<String, dynamic>> dispatchedDeliveredAcks = [];
+  bool shouldFailSend = false;
+
+  void setConnected(bool connected) {
+    connectionState.value =
+        connected ? SocketConnectionState.connected : SocketConnectionState.disconnected;
+  }
+
+  @override
+  bool get isConnected => connectionState.value == SocketConnectionState.connected;
+
+  @override
+  bool sendDeliveredAck({
+    required String conversationId,
+    required String messageId,
+    int senderId = 0,
+  }) {
+    if (!isConnected || shouldFailSend) {
+      return false;
+    }
+    dispatchedDeliveredAcks.add({
+      'conversation_id': conversationId,
+      'message_id': messageId,
+      'sender_id': senderId,
+    });
+    return true;
+  }
+}
+
+class MockTestChatMessageCache extends ChatMessageCache {
+  MockTestChatMessageCache() : super.testInstance();
+
+  bool saveCalled = false;
+  List<ChatMessage>? savedMessages;
+
+  @override
+  Future<bool> saveMessages({
+    required String conversationId,
+    required List<ChatMessage> messages,
+    dynamic watermarks,
+    bool clearWatermarks = false,
+    String? targetUserScope,
+    int? sessionEpoch,
+  }) async {
+    final effectiveUserScope = targetUserScope ?? resolveCurrentUserScope();
+    if (sessionEpoch != null && sessionEpoch != this.sessionEpoch) {
+      return false;
+    }
+    if (resolveCurrentUserScope() != effectiveUserScope) {
+      return false;
+    }
+    saveCalled = true;
+    savedMessages = List.of(messages);
+    return true;
+  }
+}
+
+class FailingChatMessageCache extends ChatMessageCache {
+  FailingChatMessageCache() : super.testInstance();
+
+  @override
+  Future<bool> saveMessages({
+    required String conversationId,
+    required List<ChatMessage> messages,
+    dynamic watermarks,
+    bool clearWatermarks = false,
+    String? targetUserScope,
+    int? sessionEpoch,
+  }) async {
+    throw Exception('Simulated cache storage failure');
+  }
+}
+
+class SilentAbortChatMessageCache extends ChatMessageCache {
+  SilentAbortChatMessageCache() : super.testInstance();
+
+  @override
+  Future<bool> saveMessages({
+    required String conversationId,
+    required List<ChatMessage> messages,
+    dynamic watermarks,
+    bool clearWatermarks = false,
+    String? targetUserScope,
+    int? sessionEpoch,
+  }) async {
+    return false;
+  }
+}
 
 class MockDeltaChatRepository extends HttpChatRepository {
   final Map<int, List<ChatMessage>> pages;
@@ -541,6 +640,7 @@ void main() {
         final bloc = InboxMessageListCursorBloc(
           conversationId: 'conv-1',
           repository: repo,
+          messageCache: MockTestChatMessageCache(),
         );
 
         bloc.upsertLocalItem(ChatMessage(
@@ -693,6 +793,7 @@ void main() {
         final bloc = InboxMessageListCursorBloc(
           conversationId: 'conv-1',
           repository: repo,
+          messageCache: MockTestChatMessageCache(),
         );
 
         bloc.upsertLocalItem(ChatMessage(
@@ -751,6 +852,626 @@ void main() {
         }
 
         expect(seenAckCalled, isFalse);
+      });
+    });
+
+    group('Delivered ACK after REST delta sync (CHAT-002)', () {
+      late MockTestChatSocketService mockSocket;
+      late MockTestChatMessageCache mockCache;
+
+      setUp(() {
+        mockSocket = MockTestChatSocketService(connected: true);
+        mockCache = MockTestChatMessageCache();
+        AuthSession.start(
+          LoginResponse(
+            token: 'test-token',
+            refreshToken: 'test-refresh',
+            user: User(id: 1, name: 'Current User'),
+          ),
+        );
+      });
+
+      tearDown(() {
+        AuthSession.clear();
+      });
+
+      test('dispatches sendDeliveredAck for un-delivered messages from other senders after durable persistence', () async {
+        final incomingMsg = ChatMessage(
+          id: '105',
+          senderId: '2',
+          receiverId: '1',
+          message: 'Hello from User 2',
+          sentAt: DateTime(2026, 1, 1),
+          isDelivered: false,
+          isSeen: false,
+          isMine: false,
+        );
+
+        final repo = MockDeltaChatRepository(
+          pages: {
+            100: [incomingMsg],
+          },
+          hasMoreCheck: (_) => false,
+        );
+
+        final bloc = InboxMessageListCursorBloc(
+          conversationId: 'conv-1',
+          repository: repo,
+          messageCache: mockCache,
+          socketService: mockSocket,
+        );
+
+        bloc.upsertLocalItem(ChatMessage(
+          id: '100',
+          senderId: '2',
+          receiverId: '1',
+          message: 'Previous msg',
+          sentAt: DateTime(2026, 1, 1),
+        ));
+
+        final success = await bloc.syncMissedMessages();
+        expect(success, isTrue);
+
+        // 1. Persistence happened first
+        expect(mockCache.saveCalled, isTrue);
+        expect(mockCache.savedMessages?.any((m) => m.id == '105'), isTrue);
+
+        // 2. Delivery ACK was dispatched with exact backend schema
+        expect(mockSocket.dispatchedDeliveredAcks.length, equals(1));
+        final ack = mockSocket.dispatchedDeliveredAcks.first;
+        expect(ack['conversation_id'], equals('conv-1'));
+        expect(ack['message_id'], equals('105'));
+        expect(ack['sender_id'], equals(2));
+
+        // 3. Tracked as delivered-acked and pending is cleared
+        expect(bloc.deliveredAckedMessageIds.contains('105'), isTrue);
+        expect(bloc.pendingDeliveredAcks, isEmpty);
+
+        await bloc.close();
+      });
+
+      test('NEVER ACKs messages sent by the current user (isMine=true or senderId=myId)', () async {
+        final myMsgBySenderId = ChatMessage(
+          id: '105',
+          senderId: '1', // Matches logged in user id 1
+          receiverId: 'conv-1',
+          message: 'Message from myself',
+          sentAt: DateTime(2026, 1, 1),
+          isDelivered: false,
+          isSeen: false,
+          isMine: false,
+        );
+        final myMsgByFlag = ChatMessage(
+          id: '106',
+          senderId: '99',
+          receiverId: 'conv-1',
+          message: 'Message with isMine flag',
+          sentAt: DateTime(2026, 1, 1),
+          isDelivered: false,
+          isSeen: false,
+          isMine: true,
+        );
+
+        final repo = MockDeltaChatRepository(
+          pages: {
+            100: [myMsgBySenderId, myMsgByFlag],
+          },
+          hasMoreCheck: (_) => false,
+        );
+
+        final bloc = InboxMessageListCursorBloc(
+          conversationId: 'conv-1',
+          repository: repo,
+          messageCache: mockCache,
+          socketService: mockSocket,
+        );
+
+        bloc.upsertLocalItem(ChatMessage(
+          id: '100',
+          senderId: '1',
+          receiverId: 'conv-1',
+          message: 'Previous msg',
+          sentAt: DateTime(2026, 1, 1),
+        ));
+
+        final success = await bloc.syncMissedMessages();
+        expect(success, isTrue);
+
+        // Delivery ACK must NEVER be dispatched for own messages
+        expect(mockSocket.dispatchedDeliveredAcks, isEmpty);
+        expect(bloc.deliveredAckedMessageIds, isEmpty);
+        expect(bloc.pendingDeliveredAcks, isEmpty);
+
+        await bloc.close();
+      });
+
+      test('NEVER ACKs messages already marked isDelivered=true or isSeen=true', () async {
+        final deliveredMsg = ChatMessage(
+          id: '105',
+          senderId: '2',
+          receiverId: '1',
+          message: 'Already delivered',
+          sentAt: DateTime(2026, 1, 1),
+          isDelivered: true,
+          isSeen: false,
+        );
+        final seenMsg = ChatMessage(
+          id: '106',
+          senderId: '2',
+          receiverId: '1',
+          message: 'Already seen',
+          sentAt: DateTime(2026, 1, 1),
+          isDelivered: false,
+          isSeen: true,
+        );
+
+        final repo = MockDeltaChatRepository(
+          pages: {
+            100: [deliveredMsg, seenMsg],
+          },
+          hasMoreCheck: (_) => false,
+        );
+
+        final bloc = InboxMessageListCursorBloc(
+          conversationId: 'conv-1',
+          repository: repo,
+          messageCache: mockCache,
+          socketService: mockSocket,
+        );
+
+        bloc.upsertLocalItem(ChatMessage(
+          id: '100',
+          senderId: '2',
+          receiverId: '1',
+          message: 'Previous msg',
+          sentAt: DateTime(2026, 1, 1),
+        ));
+
+        final success = await bloc.syncMissedMessages();
+        expect(success, isTrue);
+
+        // Already delivered or seen messages must NOT be re-ACKed
+        expect(mockSocket.dispatchedDeliveredAcks, isEmpty);
+        expect(bloc.deliveredAckedMessageIds, isEmpty);
+
+        await bloc.close();
+      });
+
+      test('is strictly idempotent across repeated delta-sync responses (no duplicate ACKs)', () async {
+        final incomingMsg = ChatMessage(
+          id: '105',
+          senderId: '2',
+          receiverId: '1',
+          message: 'Hello',
+          sentAt: DateTime(2026, 1, 1),
+          isDelivered: false,
+          isSeen: false,
+        );
+
+        final repo = MockDeltaChatRepository(
+          pages: {
+            100: [incomingMsg],
+          },
+          hasMoreCheck: (_) => false,
+        );
+
+        final bloc = InboxMessageListCursorBloc(
+          conversationId: 'conv-1',
+          repository: repo,
+          messageCache: mockCache,
+          socketService: mockSocket,
+        );
+
+        bloc.upsertLocalItem(ChatMessage(
+          id: '100',
+          senderId: '2',
+          receiverId: '1',
+          message: 'Previous msg',
+          sentAt: DateTime(2026, 1, 1),
+        ));
+
+        // First sync
+        await bloc.syncMissedMessages();
+        expect(mockSocket.dispatchedDeliveredAcks.length, equals(1));
+
+        // Second sync with identical response
+        await bloc.syncMissedMessages();
+        // Dispatched count must remain 1 - no duplicate delivery ACK
+        expect(mockSocket.dispatchedDeliveredAcks.length, equals(1));
+
+        await bloc.close();
+      });
+
+      test('persistence failure blocks delivery ACKs from being dispatched', () async {
+        final failingCache = FailingChatMessageCache();
+        final incomingMsg = ChatMessage(
+          id: '105',
+          senderId: '2',
+          receiverId: '1',
+          message: 'Hello',
+          sentAt: DateTime(2026, 1, 1),
+          isDelivered: false,
+          isSeen: false,
+        );
+
+        final repo = MockDeltaChatRepository(
+          pages: {
+            100: [incomingMsg],
+          },
+          hasMoreCheck: (_) => false,
+        );
+
+        final bloc = InboxMessageListCursorBloc(
+          conversationId: 'conv-1',
+          repository: repo,
+          messageCache: failingCache,
+          socketService: mockSocket,
+        );
+
+        bloc.upsertLocalItem(ChatMessage(
+          id: '100',
+          senderId: '2',
+          receiverId: '1',
+          message: 'Previous msg',
+          sentAt: DateTime(2026, 1, 1),
+        ));
+
+        // Sync must fail due to cache storage failure
+        final success = await bloc.syncMissedMessages();
+        expect(success, isFalse);
+
+        // Crucial invariant: NO delivery ACK is sent when persistence fails
+        expect(mockSocket.dispatchedDeliveredAcks, isEmpty);
+        expect(bloc.deliveredAckedMessageIds, isEmpty);
+        expect(bloc.pendingDeliveredAcks, isEmpty);
+
+        await bloc.close();
+      });
+
+      test('disconnected socket retains pending ACKs and flushes when socket reconnects', () async {
+        final offlineSocket = MockTestChatSocketService(connected: false);
+        final incomingMsg = ChatMessage(
+          id: '105',
+          senderId: '2',
+          receiverId: '1',
+          message: 'Hello offline',
+          sentAt: DateTime(2026, 1, 1),
+          isDelivered: false,
+          isSeen: false,
+        );
+
+        final repo = MockDeltaChatRepository(
+          pages: {
+            100: [incomingMsg],
+          },
+          hasMoreCheck: (_) => false,
+        );
+
+        final bloc = InboxMessageListCursorBloc(
+          conversationId: 'conv-1',
+          repository: repo,
+          messageCache: mockCache,
+          socketService: offlineSocket,
+        );
+
+        bloc.upsertLocalItem(ChatMessage(
+          id: '100',
+          senderId: '2',
+          receiverId: '1',
+          message: 'Previous msg',
+          sentAt: DateTime(2026, 1, 1),
+        ));
+
+        // Sync succeeds because messages are persisted locally
+        final success = await bloc.syncMissedMessages();
+        expect(success, isTrue);
+
+        // Socket is disconnected, so ACK could not be sent yet
+        expect(offlineSocket.dispatchedDeliveredAcks, isEmpty);
+        expect(bloc.pendingDeliveredAcks.containsKey('105'), isTrue);
+        expect(bloc.pendingDeliveredAcks['105'], equals(2));
+        expect(bloc.deliveredAckedMessageIds, isEmpty);
+
+        // Socket reconnects!
+        offlineSocket.setConnected(true);
+
+        // Listener triggers automatic flush of pending ACKs
+        expect(offlineSocket.dispatchedDeliveredAcks.length, equals(1));
+        expect(offlineSocket.dispatchedDeliveredAcks.first['message_id'], equals('105'));
+        expect(bloc.pendingDeliveredAcks, isEmpty);
+        expect(bloc.deliveredAckedMessageIds.contains('105'), isTrue);
+
+        await bloc.close();
+      });
+
+      test('multi-page delta sync collects and ACKs all un-delivered messages across pages', () async {
+        final page1Msg1 = ChatMessage(id: '101', senderId: '2', receiverId: '1', message: 'M1', sentAt: DateTime(2026, 1, 1));
+        final page1Msg2 = ChatMessage(id: '102', senderId: '3', receiverId: '1', message: 'M2', sentAt: DateTime(2026, 1, 1));
+        final page2Msg1 = ChatMessage(id: '103', senderId: '2', receiverId: '1', message: 'M3', sentAt: DateTime(2026, 1, 1));
+        final page2Msg2 = ChatMessage(id: '104', senderId: '4', receiverId: '1', message: 'M4', sentAt: DateTime(2026, 1, 1));
+
+        final repo = MockDeltaChatRepository(
+          pages: {
+            100: [page1Msg1, page1Msg2],
+            102: [page2Msg1, page2Msg2],
+          },
+          hasMoreCheck: (sinceId) => sinceId == 100,
+        );
+
+        final bloc = InboxMessageListCursorBloc(
+          conversationId: 'conv-1',
+          repository: repo,
+          messageCache: mockCache,
+          socketService: mockSocket,
+        );
+
+        bloc.upsertLocalItem(ChatMessage(id: '100', senderId: '2', receiverId: '1', message: 'M0', sentAt: DateTime(2026, 1, 1)));
+
+        final success = await bloc.syncMissedMessages();
+        expect(success, isTrue);
+
+        expect(mockSocket.dispatchedDeliveredAcks.length, equals(4));
+        final ackedIds = mockSocket.dispatchedDeliveredAcks.map((a) => a['message_id']).toSet();
+        expect(ackedIds, equals({'101', '102', '103', '104'}));
+        expect(bloc.deliveredAckedMessageIds, equals({'101', '102', '103', '104'}));
+
+        await bloc.close();
+      });
+
+      test('clearLocalItems resets both pending and delivered ACK tracking', () async {
+        final incomingMsg = ChatMessage(
+          id: '105',
+          senderId: '2',
+          receiverId: '1',
+          message: 'Hello',
+          sentAt: DateTime(2026, 1, 1),
+        );
+
+        final repo = MockDeltaChatRepository(
+          pages: {
+            100: [incomingMsg],
+          },
+          hasMoreCheck: (_) => false,
+        );
+
+        final bloc = InboxMessageListCursorBloc(
+          conversationId: 'conv-1',
+          repository: repo,
+          messageCache: mockCache,
+          socketService: mockSocket,
+        );
+
+        bloc.upsertLocalItem(ChatMessage(id: '100', senderId: '2', receiverId: '1', message: 'M0', sentAt: DateTime(2026, 1, 1)));
+
+        await bloc.syncMissedMessages();
+        expect(bloc.deliveredAckedMessageIds.contains('105'), isTrue);
+
+        bloc.clearLocalItems();
+        expect(bloc.deliveredAckedMessageIds, isEmpty);
+        expect(bloc.pendingDeliveredAcks, isEmpty);
+
+        await bloc.close();
+      });
+
+      test('silent abort in saveMessages (returns false) prevents delivery ACK staging and dispatch', () async {
+        final silentAbortCache = SilentAbortChatMessageCache();
+        final incomingMsg = ChatMessage(
+          id: '105',
+          senderId: '2',
+          receiverId: '1',
+          message: 'Hello silent abort',
+          sentAt: DateTime(2026, 1, 1),
+          isDelivered: false,
+          isSeen: false,
+        );
+
+        final repo = MockDeltaChatRepository(
+          pages: {
+            100: [incomingMsg],
+          },
+          hasMoreCheck: (_) => false,
+        );
+
+        final bloc = InboxMessageListCursorBloc(
+          conversationId: 'conv-1',
+          repository: repo,
+          messageCache: silentAbortCache,
+          socketService: mockSocket,
+        );
+
+        bloc.upsertLocalItem(ChatMessage(
+          id: '100',
+          senderId: '2',
+          receiverId: '1',
+          message: 'Previous msg',
+          sentAt: DateTime(2026, 1, 1),
+        ));
+
+        final success = await bloc.syncMissedMessages();
+        expect(success, isFalse);
+
+        // Verification: No ACKs are staged or dispatched when persistence silently aborts
+        expect(mockSocket.dispatchedDeliveredAcks, isEmpty);
+        expect(bloc.deliveredAckedMessageIds, isEmpty);
+        expect(bloc.pendingDeliveredAcks, isEmpty);
+
+        await bloc.close();
+      });
+
+      test('sendDeliveredAck failure retains message in pendingDeliveredAcks and retries on flush/reconnect without duplicates', () async {
+        final failingSocket = MockTestChatSocketService(connected: true);
+        failingSocket.shouldFailSend = true;
+
+        final incomingMsg = ChatMessage(
+          id: '105',
+          senderId: '2',
+          receiverId: '1',
+          message: 'Hello retry',
+          sentAt: DateTime(2026, 1, 1),
+          isDelivered: false,
+          isSeen: false,
+        );
+
+        final repo = MockDeltaChatRepository(
+          pages: {
+            100: [incomingMsg],
+          },
+          hasMoreCheck: (_) => false,
+        );
+
+        final bloc = InboxMessageListCursorBloc(
+          conversationId: 'conv-1',
+          repository: repo,
+          messageCache: mockCache,
+          socketService: failingSocket,
+        );
+
+        bloc.upsertLocalItem(ChatMessage(
+          id: '100',
+          senderId: '2',
+          receiverId: '1',
+          message: 'Previous msg',
+          sentAt: DateTime(2026, 1, 1),
+        ));
+
+        // Sync runs, persistence succeeds, but socket dispatch fails
+        final success = await bloc.syncMissedMessages();
+        expect(success, isTrue);
+
+        // ACK was NOT sent and NOT marked as acked
+        expect(failingSocket.dispatchedDeliveredAcks, isEmpty);
+        expect(bloc.deliveredAckedMessageIds, isEmpty);
+        expect(bloc.pendingDeliveredAcks.containsKey('105'), isTrue);
+        expect(bloc.pendingDeliveredAcks['105'], equals(2));
+
+        // Network recovers: sending now succeeds
+        failingSocket.shouldFailSend = false;
+        bloc.flushPendingDeliveredAcks();
+
+        expect(failingSocket.dispatchedDeliveredAcks.length, equals(1));
+        expect(failingSocket.dispatchedDeliveredAcks.first['message_id'], equals('105'));
+        expect(failingSocket.dispatchedDeliveredAcks.first['sender_id'], equals(2));
+        expect(bloc.pendingDeliveredAcks, isEmpty);
+        expect(bloc.deliveredAckedMessageIds.contains('105'), isTrue);
+
+        // Second flush does not re-dispatch (idempotent / no duplicate)
+        bloc.flushPendingDeliveredAcks();
+        expect(failingSocket.dispatchedDeliveredAcks.length, equals(1));
+
+        await bloc.close();
+      });
+
+      test('account switch and session epoch drift purge pending ACKs preventing cross-account leakage', () async {
+        final initialResolver = ChatMessageCache.userScopeResolver;
+        try {
+          ChatMessageCache.userScopeResolver = () => 'user-101';
+
+          final offlineSocket = MockTestChatSocketService(connected: false);
+          final testCache = MockTestChatMessageCache();
+
+          final incomingMsg = ChatMessage(
+            id: '105',
+            senderId: '2',
+            receiverId: 'user-101',
+            message: 'Secret message for user 101',
+            sentAt: DateTime(2026, 1, 1),
+            isDelivered: false,
+            isSeen: false,
+          );
+
+          final repo = MockDeltaChatRepository(
+            pages: {
+              100: [incomingMsg],
+            },
+            hasMoreCheck: (_) => false,
+          );
+
+          final bloc = InboxMessageListCursorBloc(
+            conversationId: 'conv-1',
+            repository: repo,
+            messageCache: testCache,
+            socketService: offlineSocket,
+          );
+
+          bloc.upsertLocalItem(ChatMessage(
+            id: '100',
+            senderId: '2',
+            receiverId: 'user-101',
+            message: 'Previous msg',
+            sentAt: DateTime(2026, 1, 1),
+          ));
+
+          // User 101 syncs while socket is disconnected
+          final syncResult = await bloc.syncMissedMessages();
+          expect(syncResult, isTrue);
+          expect(bloc.pendingDeliveredAcks.containsKey('105'), isTrue);
+          expect(offlineSocket.dispatchedDeliveredAcks, isEmpty);
+
+          // User 101 logs out: session epoch is incremented and user scope switches to User 102
+          testCache.incrementSessionEpochForTesting();
+          ChatMessageCache.userScopeResolver = () => 'user-102';
+
+          // User 102 connects socket
+          offlineSocket.setConnected(true);
+
+          // Verify pending ACKs from User 101 were invalidated and NOT sent over User 102's socket
+          expect(offlineSocket.dispatchedDeliveredAcks, isEmpty);
+          expect(bloc.pendingDeliveredAcks, isEmpty);
+          expect(bloc.deliveredAckedMessageIds, isEmpty);
+
+          await bloc.close();
+        } finally {
+          ChatMessageCache.userScopeResolver = initialResolver;
+        }
+      });
+
+      test('delivery ACK payload strictly conforms to Go backend AckPayload schema', () async {
+        final incomingMsg = ChatMessage(
+          id: '54321',
+          senderId: '987',
+          receiverId: '1',
+          message: 'Contract check message',
+          sentAt: DateTime(2026, 1, 1),
+          isDelivered: false,
+          isSeen: false,
+        );
+
+        final repo = MockDeltaChatRepository(
+          pages: {
+            54300: [incomingMsg],
+          },
+          hasMoreCheck: (_) => false,
+        );
+
+        final bloc = InboxMessageListCursorBloc(
+          conversationId: 'conv-contract-test',
+          repository: repo,
+          messageCache: mockCache,
+          socketService: mockSocket,
+        );
+
+        bloc.upsertLocalItem(ChatMessage(
+          id: '54300',
+          senderId: '987',
+          receiverId: '1',
+          message: 'Previous msg',
+          sentAt: DateTime(2026, 1, 1),
+        ));
+
+        await bloc.syncMissedMessages();
+
+        expect(mockSocket.dispatchedDeliveredAcks.length, equals(1));
+        final ack = mockSocket.dispatchedDeliveredAcks.first;
+
+        // Verify Go backend hub.go / event.go expectations:
+        // AckPayload: MessageID (int64/int), ConversationID (string), SenderID (int)
+        expect(ack['conversation_id'], isA<String>());
+        expect(ack['conversation_id'], equals('conv-contract-test'));
+        expect(ack['message_id'], equals('54321'));
+        expect(ack['sender_id'], isA<int>());
+        expect(ack['sender_id'], equals(987));
+
+        await bloc.close();
       });
     });
   });
