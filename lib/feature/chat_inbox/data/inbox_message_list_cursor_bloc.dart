@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:developer';
 
 import 'package:either_dart/either.dart';
@@ -6,10 +7,12 @@ import 'package:whatsapp_flutter_go/core/state/common_base_bloc.dart';
 import 'package:whatsapp_flutter_go/core/state/cursor/cursor_pagination_response.dart';
 import 'package:whatsapp_flutter_go/core/state/cursor/local_sync_cursor_pagination_bloc.dart';
 
+import '../../../core/db/local_cache/chat_message_cache.dart';
 import '../../../core/db/network/socket/chat_socket_service.dart';
 import '../../../core/session/auth_session.dart';
 import '../../home/data/http_chat_repository.dart';
 import '../../home/model/chat_message.dart';
+import 'chat_seen_ack_manager.dart';
 import 'outbox/client_message_id_generator.dart';
 import 'outbox/local_outbox_storage.dart';
 import 'outbox/pending_outbox_message.dart';
@@ -22,6 +25,7 @@ class InboxMessageListCursorBloc
   final bool isGroup;
   final Set<int>? groupMemberIds;
   final LocalOutboxStorage outboxStorage;
+  final ChatMessageCache messageCache;
 
   InboxMessageListCursorBloc({
     required this.conversationId,
@@ -29,8 +33,10 @@ class InboxMessageListCursorBloc
     this.groupMemberIds,
     HttpChatRepository? repository,
     LocalOutboxStorage? outboxStorage,
+    ChatMessageCache? messageCache,
   })  : repository = repository ?? const HttpChatRepository(),
         outboxStorage = outboxStorage ?? SharedPreferencesOutboxStorage(),
+        messageCache = messageCache ?? ChatMessageCache(),
         super(InitialState());
 
   @override
@@ -121,8 +127,14 @@ class InboxMessageListCursorBloc
     } catch (e) {
       final wasInitialLoading = _isInitialLoading;
       _isInitialLoading = false;
+      if (cursorPageHolder.items.isNotEmpty) {
+        _hasInitialLoaded = true;
+      }
       if (wasInitialLoading) {
         onInitialLoadCompleted?.call();
+      }
+      if (cursorPageHolder.items.isNotEmpty) {
+        emitCurrentLocalData(hasCleared: false);
       }
       rethrow;
     }
@@ -135,14 +147,28 @@ class InboxMessageListCursorBloc
 
   bool _isInitialLoading = false;
   bool _hasInitialLoaded = false;
+  int? _currentSessionEpoch;
+  String? _currentUserScope;
+  Future<void>? _initialHydrationFuture;
+
+  @visibleForTesting
+  Future<void>? get initialHydrationFuture => _initialHydrationFuture;
 
   bool get isInitialLoading => _isInitialLoading;
   bool get hasInitialLoaded => _hasInitialLoaded;
 
   void execute({bool? pageFromStart}) {
-    if ((pageFromStart ?? false) || (!_hasInitialLoaded && cursorPageHolder.items.isEmpty)) {
+    final isInitial =
+        !_hasInitialLoaded && (cursorPageHolder.items.isEmpty || (pageFromStart ?? false));
+
+    if (isInitial) {
       _isInitialLoading = true;
+      _initialHydrationFuture = _executeInitialHydrationAndFetch(
+        pageFromStart: pageFromStart ?? false,
+      );
+      return;
     }
+
     add(
       FetchDataWithQueryEvent(
         query: {},
@@ -151,11 +177,162 @@ class InboxMessageListCursorBloc
     );
   }
 
+  Future<void> _executeInitialHydrationAndFetch({
+    required bool pageFromStart,
+  }) async {
+    _currentSessionEpoch = messageCache.sessionEpoch;
+    _currentUserScope = messageCache.resolveCurrentUserScope();
+
+    try {
+      // 1. Read persisted confirmed messages from local storage
+      final cached = await messageCache.getMessages(
+        conversationId: conversationId,
+        targetUserScope: _currentUserScope,
+      );
+
+      // 2. Load pending outgoing messages from LocalOutboxStorage
+      final pendingOutbox = await outboxStorage.getMessagesForConversation(
+        conversationId,
+        targetUserScope: _currentUserScope,
+      );
+
+      // 3. Merge both without duplicates and emit the cached view promptly
+      if ((cached != null && cached.messages.isNotEmpty) || pendingOutbox.isNotEmpty) {
+        _hydrateLocalSnapshot(
+          cachedMessages: cached?.messages ?? [],
+          watermarks: cached?.watermarks,
+          pendingOutbox: pendingOutbox,
+          userScope: _currentUserScope ?? '',
+        );
+      }
+    } catch (e, st) {
+      log('Initial cache hydration error: $e', name: 'InboxMessageListCursorBloc', stackTrace: st);
+    }
+
+    // 4. Start the existing server history request
+    add(
+      FetchDataWithQueryEvent(
+        query: {},
+        clearPageWithNewData: false,
+      ),
+    );
+  }
+
+  void _hydrateLocalSnapshot({
+    required List<ChatMessage> cachedMessages,
+    dynamic watermarks,
+    required List<PendingOutboxMessage> pendingOutbox,
+    required String userScope,
+  }) {
+    final pendingMessages = pendingOutbox.map((p) => ChatMessage(
+      id: '',
+      clientMessageId: p.clientMessageId,
+      senderId: p.senderId.isNotEmpty ? p.senderId : userScope,
+      receiverId: p.conversationId,
+      message: p.content,
+      sentAt: p.createdAt,
+      messageType: p.messageType,
+      isMine: true,
+      isDelivered: false,
+      isSeen: false,
+      timeStamp: TimeStamp.fromDatePublish(p.createdAt.millisecondsSinceEpoch),
+    )).toList();
+
+    final confirmedClientIds = cachedMessages
+        .map((m) => m.clientMessageId)
+        .where((id) => id != null && id.isNotEmpty)
+        .toSet();
+
+    for (final p in pendingMessages) {
+      if (confirmedClientIds.contains(p.clientMessageId)) {
+        unawaited(outboxStorage.remove(p.clientMessageId!));
+      }
+    }
+
+    final activePending = pendingMessages
+        .where((p) => !confirmedClientIds.contains(p.clientMessageId))
+        .toList();
+
+    activePending.sort((a, b) => b.sentAt.compareTo(a.sentAt));
+
+    final merged = <ChatMessage>[
+      ...activePending,
+      ...cachedMessages,
+    ];
+
+    extractWaterMark(watermarks);
+
+    cursorPageHolder.items = List<ChatMessage>.from(merged);
+
+    saveResponse = CursorPaginationResponse<ChatMessage>(
+      data: List<ChatMessage>.from(merged),
+      hasMore: false,
+      fromJsonFactory: ChatMessage.fromJson,
+      toJsonFactory: (m) => m.toJson(),
+      extra: {
+        'watermarks': ?watermarks,
+      },
+    );
+
+    _applyLatestWatermarkResolution(
+      messages: cursorPageHolder.items,
+      emitState: false,
+    );
+
+    emitCurrentLocalData(hasCleared: false);
+  }
+
   @override
   void doActionBeforeEmitSuccessWithPaginationState(
     SuccessWithPaginationState<CursorPaginationResponse<ChatMessage>> state,
   ) {
-    super.doActionBeforeEmitSuccessWithPaginationState(state);
+    final response = state.data;
+    final incoming = response.data ?? <ChatMessage>[];
+    final existing = cursorPageHolder.items;
+
+    // 1. Reconcile outbox for incoming server-confirmed items
+    _reconcileOutboxFromIncoming(incoming);
+
+    final incomingClientIds = incoming
+        .map((m) => m.clientMessageId)
+        .where((id) => id != null && id.isNotEmpty)
+        .toSet();
+
+    // 2. Identify unresolved pending outbox messages in local state
+    final unresolvedPending = existing.where((msg) {
+      final isPending = msg.isMine &&
+          (msg.id.isEmpty || msg.id == '0') &&
+          msg.clientMessageId != null &&
+          msg.clientMessageId!.isNotEmpty;
+      return isPending && !incomingClientIds.contains(msg.clientMessageId);
+    }).toList();
+
+    // 3. Merge confirmed messages from existing (cached + live WebSocket) and incoming (HTTP page)
+    final existingConfirmed = existing
+        .where((m) => m.id.isNotEmpty && m.id != '0')
+        .toList();
+
+    final incomingConfirmed = incoming
+        .where((m) => m.id.isNotEmpty && m.id != '0')
+        .toList();
+
+    final mergedConfirmed = _mergeConfirmedHistory(
+      existingConfirmed: existingConfirmed,
+      incomingConfirmed: incomingConfirmed,
+    );
+
+    // 4. Unresolved pending messages always sit at the very top (index 0..k), newest first
+    unresolvedPending.sort((a, b) => b.sentAt.compareTo(a.sentAt));
+    final finalMerged = <ChatMessage>[
+      ...unresolvedPending,
+      ...mergedConfirmed,
+    ];
+
+    // 5. Update holders and response state
+    cursorPageHolder.items = List<ChatMessage>.from(finalMerged);
+    cursorPageHolder.nextCursor = nextCursor;
+    response.data = List<ChatMessage>.from(finalMerged);
+    saveResponse = response;
 
     extractWaterMark(state.data.extra?['watermarks']);
 
@@ -164,7 +341,7 @@ class InboxMessageListCursorBloc
       emitState: false,
     );
 
-    _reconcileOutboxFromIncoming(state.data.data);
+    _persistConfirmedMessages(state.data.extra?['watermarks']);
 
     final wasInitialLoading = _isInitialLoading;
     _isInitialLoading = false;
@@ -172,6 +349,115 @@ class InboxMessageListCursorBloc
 
     if (wasInitialLoading) {
       onInitialLoadCompleted?.call();
+    }
+  }
+
+  List<ChatMessage> _mergeConfirmedHistory({
+    required List<ChatMessage> existingConfirmed,
+    required List<ChatMessage> incomingConfirmed,
+  }) {
+    if (incomingConfirmed.isEmpty) {
+      return List<ChatMessage>.from(existingConfirmed);
+    }
+    if (existingConfirmed.isEmpty) {
+      return List<ChatMessage>.from(incomingConfirmed);
+    }
+
+    // 1. Map existing items by identity for fast lookup
+    final existingByIdentity = <String, ChatMessage>{};
+    for (final e in existingConfirmed) {
+      existingByIdentity[itemIdentity(e)] = e;
+    }
+
+    // 2. Identify existing items that are NOT present in incoming
+    final incomingIdentities =
+        incomingConfirmed.map((m) => itemIdentity(m)).toSet();
+    final notInIncoming = existingConfirmed
+        .where((e) => !incomingIdentities.contains(itemIdentity(e)))
+        .toList();
+
+    // 3. For items in incoming, merge monotonic state from existing if found
+    final mergedIncoming = incomingConfirmed.map((inc) {
+      final existing = existingByIdentity[itemIdentity(inc)];
+      if (existing != null) {
+        return mergeItem(existing, inc);
+      }
+      return inc;
+    }).toList();
+
+    // 4. Combine all confirmed messages (incoming + local confirmed not in incoming)
+    final combinedConfirmed = <ChatMessage>[
+      ...mergedIncoming,
+      ...notInIncoming,
+    ];
+
+    // 5. Canonical descending sort (ORDER BY id DESC, matching Go backend contract),
+    // falling back to sentAt descending.
+    combinedConfirmed.sort(_compareCanonicalDescending);
+
+    return combinedConfirmed;
+  }
+
+  int _compareCanonicalDescending(ChatMessage a, ChatMessage b) {
+    final aId = int.tryParse(a.id);
+    final bId = int.tryParse(b.id);
+    if (aId != null && bId != null) {
+      if (aId != bId) {
+        return bId.compareTo(aId); // Higher ID first (id DESC)
+      }
+    }
+    final sentAtCompare = b.sentAt.compareTo(a.sentAt);
+    if (sentAtCompare != 0) {
+      return sentAtCompare;
+    }
+    return b.id.compareTo(a.id);
+  }
+
+  /// Exports in-memory watermark state to a JSON map compatible with the
+  /// backend's watermarks structure (`{ "<msgId>": { "users": [...], "count": N } }`).
+  Map<String, dynamic> exportWatermarksJson() {
+    final result = <String, dynamic>{};
+    for (final entry in userLastMessageSeenID.entries) {
+      final userId = entry.key;
+      final msgId = entry.value;
+      if (msgId <= 0) continue;
+      final msgKey = msgId.toString();
+      final profile = userProfiles[userId] ??
+          ReadReceiptUser(userId: userId, name: '', avatarUrl: '');
+      final existingGroup = result[msgKey];
+      if (existingGroup is Map<String, dynamic>) {
+        final users = existingGroup['users'] as List<dynamic>;
+        users.add(profile.toJson());
+        existingGroup['count'] = users.length;
+      } else {
+        result[msgKey] = {
+          'users': [profile.toJson()],
+          'count': 1,
+        };
+      }
+    }
+    return result;
+  }
+
+  void _persistConfirmedMessages([dynamic watermarks]) {
+    final confirmed = cursorPageHolder.items
+        .where((m) => m.id.isNotEmpty && m.id != '0')
+        .take(50)
+        .toList();
+
+    if (confirmed.isNotEmpty) {
+      final exported = exportWatermarksJson();
+      final effectiveWatermarks =
+          watermarks ?? (exported.isNotEmpty ? exported : null);
+      unawaited(
+        messageCache.saveMessages(
+          conversationId: conversationId,
+          messages: confirmed,
+          watermarks: effectiveWatermarks,
+          targetUserScope: _currentUserScope ?? messageCache.resolveCurrentUserScope(),
+          sessionEpoch: _currentSessionEpoch ?? messageCache.sessionEpoch,
+        ),
+      );
     }
   }
 
@@ -225,6 +511,17 @@ class InboxMessageListCursorBloc
           messageId: messageId,
           profile: profile,
         );
+
+        final currentUserId =
+            int.tryParse(_currentUserScope ?? AuthSession.tokens?.user?.id?.toString() ?? '') ?? 0;
+        if (currentUserId > 0 && profile.userId == currentUserId) {
+          unawaited(
+            ChatSeenAckManager.instance.confirmServerWatermark(
+              conversationId: conversationId,
+              serverMessageId: messageId,
+            ),
+          );
+        }
       }
     }
   }
@@ -407,6 +704,52 @@ class InboxMessageListCursorBloc
       messages: cursorPageHolder.items,
       emitState: true,
     );
+
+    _persistConfirmedMessages();
+  }
+
+  /// Reconciles incoming delivery or seen status from WebSocket `status_updated`
+  /// monotonically and persists updated items to local cache.
+  bool handleStatusUpdated({
+    required String? statusMessageId,
+    required String? status,
+  }) {
+    if (statusMessageId == null) return false;
+    final targetId = int.tryParse(statusMessageId) ?? 0;
+    final isSeenEvent = status == 'seen';
+    final isDeliveredEvent = status == 'delivered';
+    if (!isSeenEvent && !isDeliveredEvent) return false;
+
+    final items = cursorPageHolder.items;
+    if (items.isEmpty) return false;
+
+    var changed = false;
+    final updated = items.map((item) {
+      if (!item.isMine) return item;
+      final currentId = int.tryParse(item.id) ?? 0;
+      if (currentId <= 0 || currentId > targetId) return item;
+
+      // Monotonicity: seen implies delivered. Once seen, cannot be downgraded.
+      if (isSeenEvent && !item.isSeen) {
+        changed = true;
+        return item.copyWith(
+          isSeen: true,
+          isDelivered: true,
+        );
+      } else if (isDeliveredEvent && !item.isDelivered && !item.isSeen) {
+        changed = true;
+        return item.copyWith(
+          isDelivered: true,
+        );
+      }
+      return item;
+    }).toList();
+
+    if (changed) {
+      replaceLocalItems(updated, emitState: true);
+      _persistConfirmedMessages();
+    }
+    return changed;
   }
 
   // ---------------------------------------------------------------------------
@@ -419,6 +762,7 @@ class InboxMessageListCursorBloc
     userProfiles.clear();
     _isInitialLoading = false;
     _hasInitialLoaded = false;
+    _initialHydrationFuture = null;
     super.clearLocalItems(resetPaginationState: resetPaginationState);
   }
 
@@ -475,6 +819,10 @@ class InboxMessageListCursorBloc
       timeStamp: TimeStamp.fromDatePublish(now.millisecondsSinceEpoch),
     );
 
+    final effectiveSenderId = (currentUserId != null && currentUserId.isNotEmpty)
+        ? currentUserId
+        : (_currentUserScope ?? messageCache.resolveCurrentUserScope());
+
     // 1. Persist to outbox BEFORE network transmission
     final pendingOutbox = PendingOutboxMessage(
       clientMessageId: effectiveClientMessageId,
@@ -482,6 +830,7 @@ class InboxMessageListCursorBloc
       content: content,
       messageType: messageType,
       createdAt: now,
+      senderId: effectiveSenderId,
     );
     await outboxStorage.save(pendingOutbox);
 
@@ -532,6 +881,8 @@ class InboxMessageListCursorBloc
       messages: cursorPageHolder.items,
       emitState: true,
     );
+
+    _persistConfirmedMessages();
   }
 
   /// Returns the highest message ID currently loaded in memory.
@@ -645,6 +996,8 @@ class InboxMessageListCursorBloc
         messages: cursorPageHolder.items,
         emitState: true,
       );
+
+      _persistConfirmedMessages();
 
       return true;
     } catch (e, stackTrace) {

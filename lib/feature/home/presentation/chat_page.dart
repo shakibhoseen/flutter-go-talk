@@ -116,46 +116,63 @@ class _ChatPageState extends State<ChatPage> {
                     .toList();
               }
               if (conversations.isEmpty) {
-                return Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
+                return RefreshIndicator(
+                  onRefresh: widget.viewModel.refreshConversations,
+                  color: AppColors.cyanAccent,
+                  child: ListView(
+                    physics: const AlwaysScrollableScrollPhysics(),
                     children: [
-                      Icon(
-                        Icons.chat_bubble_outline_rounded,
-                        size: 56,
-                        color: AppColors.neutralColor.shade300,
-                      ),
-                      const SizedBox(height: 12),
-                      Text(
-                        _filter.isNotEmpty
-                            ? 'No conversations found'
-                            : 'No conversations yet',
-                        style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w500,
-                          color: AppColors.neutralColor.shade500,
+                      SizedBox(
+                        height: MediaQuery.of(context).size.height * 0.4,
+                        child: Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.chat_bubble_outline_rounded,
+                                size: 56,
+                                color: AppColors.neutralColor.shade300,
+                              ),
+                              const SizedBox(height: 12),
+                              Text(
+                                _filter.isNotEmpty
+                                    ? 'No conversations found'
+                                    : 'No conversations yet',
+                                style: TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w500,
+                                  color: AppColors.neutralColor.shade500,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     ],
                   ),
                 );
               }
-              return ListView.separated(
-                itemCount: conversations.length,
-                separatorBuilder: (context, index) => Divider(
-                  height: 1,
-                  thickness: 0.8,
-                  indent: 80,
-                  endIndent: 16,
-                  color: AppColors.neutralColor.shade100,
+              return RefreshIndicator(
+                onRefresh: widget.viewModel.refreshConversations,
+                color: AppColors.cyanAccent,
+                child: ListView.separated(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  itemCount: conversations.length,
+                  separatorBuilder: (context, index) => Divider(
+                    height: 1,
+                    thickness: 0.8,
+                    indent: 80,
+                    endIndent: 16,
+                    color: AppColors.neutralColor.shade100,
+                  ),
+                  itemBuilder: (context, index) {
+                    final conversation = conversations[index];
+                    return ConversationTile(
+                      conversation: conversation,
+                      onTap: () => onTap(conversation),
+                    );
+                  },
                 ),
-                itemBuilder: (context, index) {
-                  final conversation = conversations[index];
-                  return ConversationTile(
-                    conversation: conversation,
-                    onTap: () => onTap(conversation),
-                  );
-                },
               );
             },
           ),

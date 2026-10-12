@@ -32,11 +32,11 @@ class ProfilePage extends StatelessWidget {
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
-            onPressed: () {
+            onPressed: () async {
               Navigator.pop(dialogContext);
               ChatSyncCoordinator.instance.stop();
               ChatSocketService.instance.disconnect();
-              AuthSession.clear();
+              await AuthSession.clear();
               locator<SessionCubit>().sync(isLoggedIn: false);
               NavigationService.removeALlAndReplace(AuthRoutes.login);
             },

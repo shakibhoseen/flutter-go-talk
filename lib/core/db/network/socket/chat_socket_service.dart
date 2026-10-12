@@ -32,6 +32,9 @@ enum SocketConnectionState {
 class ChatSocketService with WidgetsBindingObserver {
   ChatSocketService._();
 
+  @visibleForTesting
+  ChatSocketService.testInstance() : this._();
+
   static final ChatSocketService instance = ChatSocketService._();
 
   WebSocketChannel? _channel;
@@ -167,16 +170,17 @@ class ChatSocketService with WidgetsBindingObserver {
     });
   }
 
-  void send(Object? message) {
+  bool send(Object? message) {
     if (_channel == null) {
       log('Socket is disconnected, message dropped: $message',
           name: 'ChatSocketService');
       if (!_isExplicitlyDisconnected) {
         connect();
       }
-      return;
+      return false;
     }
     _channel?.sink.add(message);
+    return true;
   }
 
   void sendRaw(Map<String, dynamic> data) => send(jsonEncode(data));
@@ -206,12 +210,12 @@ class ChatSocketService with WidgetsBindingObserver {
 
   /// Sends a seen acknowledgment (`ack_seen`) via WebSocket for instant blue ticks
   /// following industry-standard WhatsApp/Telegram real-time patterns.
-  void sendDeliveredAck({
+  bool sendDeliveredAck({
     required String conversationId,
     required String messageId,
     int senderId = 0,
   }) {
-    send(
+    return send(
       jsonEncode({
         'type': 'ack_delivered',
         'payload': {
@@ -223,12 +227,12 @@ class ChatSocketService with WidgetsBindingObserver {
     );
   }
 
-  void sendSeenAck({
+  bool sendSeenAck({
     required String conversationId,
     required String messageId,
     int senderId = 0,
   }) {
-    send(
+    return send(
       jsonEncode({
         'type': 'ack_seen',
         'payload': {

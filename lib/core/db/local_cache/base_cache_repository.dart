@@ -8,8 +8,17 @@ import 'cache_manager.dart';
 import 'cache_strategy.dart';
 
 abstract class BaseCachedRepository {
-  final CacheManager _cache = CacheManager();
-  final GlobalDataApi dataApi = GlobalDataApi.instance;
+  final CacheManager? _cacheManager;
+  final GlobalDataApi? _globalDataApi;
+
+  const BaseCachedRepository({
+    CacheManager? cache,
+    GlobalDataApi? dataApi,
+  })  : _cacheManager = cache,
+        _globalDataApi = dataApi;
+
+  CacheManager get cache => _cacheManager ?? CacheManager();
+  GlobalDataApi get dataApi => _globalDataApi ?? GlobalDataApi.instance;
 
   /// The single place this class reaches the network. Overriding it is how a
   /// subclass (or a test) changes where the data comes from without touching
@@ -38,17 +47,21 @@ abstract class BaseCachedRepository {
     CacheStrategy? strategy,
     Duration? maxStale,
   }) async* {
+    final capturedUserScope = cache.resolveCurrentUserScope();
+    final capturedEpoch = cache.sessionEpoch;
+
     // if invalid Cache, then cache will be removed
     if (invalidCache ?? false) {
-      await _cache.invalidateEndpoint(endpoint);
+      await cache.invalidateEndpoint(endpoint);
     }
 
     final resolved = strategy ?? CacheConfig.defaultStrategy;
 
     if (resolved == CacheStrategy.validityFirst) {
-      final cached = await _cache.getResponse(
+      final cached = await cache.getResponse(
         endpoint: endpoint,
         params: query,
+        targetUserScope: capturedUserScope,
       );
       if (cached != null) {
         yield fromJson(cached);
@@ -56,28 +69,47 @@ abstract class BaseCachedRepository {
       }
 
       final response = await fetch(endpoint, query);
-      await _cache.cacheResponse(
+      if (cache.sessionEpoch != capturedEpoch ||
+          cache.resolveCurrentUserScope() != capturedUserScope) {
+        log('Session changed during fetch for $endpoint; aborting emission and cache write',
+            name: 'CachedRepository');
+        return;
+      }
+
+      final mapResponse = response is Map<String, dynamic>
+          ? response
+          : (response is Map
+              ? Map<String, dynamic>.from(response)
+              : <String, dynamic>{});
+      await cache.cacheResponse(
         endpoint: endpoint,
         params: query,
-        data: response,
+        data: mapResponse,
         maxAge: maxAge,
+        targetUserScope: capturedUserScope,
+        sessionEpoch: capturedEpoch,
       );
-      yield fromJson(response);
+      yield fromJson(mapResponse);
       return;
     }
 
     // --- stale-while-revalidate ---
 
-    final cachedRaw = await _cache.getRawResponse(
+    final cachedRaw = await cache.getRawResponse(
       endpoint: endpoint,
       params: query,
       maxStale: maxStale ?? CacheConfig.maxStale,
+      targetUserScope: capturedUserScope,
     );
 
     var servedFromCache = false;
     if (cachedRaw != null) {
       try {
-        yield fromJson(jsonDecode(cachedRaw) as Map<String, dynamic>);
+        final decoded = jsonDecode(cachedRaw);
+        final map = decoded is Map<String, dynamic>
+            ? decoded
+            : Map<String, dynamic>.from(decoded as Map);
+        yield fromJson(map);
         servedFromCache = true;
       } catch (e) {
         // A corrupt or outdated-shape cache entry must never break a screen;
@@ -88,25 +120,41 @@ abstract class BaseCachedRepository {
 
     try {
       final response = await fetch(endpoint, query);
+      if (cache.sessionEpoch != capturedEpoch ||
+          cache.resolveCurrentUserScope() != capturedUserScope) {
+        log('Session changed during fetch for $endpoint; aborting emission and cache write',
+            name: 'CachedRepository');
+        return;
+      }
 
-      if (servedFromCache && jsonEncode(response) == cachedRaw) {
+      final mapResponse = response is Map<String, dynamic>
+          ? response
+          : (response is Map
+              ? Map<String, dynamic>.from(response)
+              : <String, dynamic>{});
+
+      if (servedFromCache && jsonEncode(mapResponse) == cachedRaw) {
         // Identical bytes: extend the entry's life and stop. No second
         // emission, so nothing rebuilds and nothing blinks.
-        await _cache.touch(
+        await cache.touch(
           endpoint: endpoint,
           params: query,
           maxAge: maxAge,
+          targetUserScope: capturedUserScope,
+          sessionEpoch: capturedEpoch,
         );
         return;
       }
 
-      await _cache.cacheResponse(
+      await cache.cacheResponse(
         endpoint: endpoint,
         params: query,
-        data: response,
+        data: mapResponse,
         maxAge: maxAge,
+        targetUserScope: capturedUserScope,
+        sessionEpoch: capturedEpoch,
       );
-      yield fromJson(response);
+      yield fromJson(mapResponse);
     } catch (e) {
       // With data already on screen a failed refresh is not the user's
       // problem. With nothing on screen, it is the only answer we have.

@@ -276,7 +276,7 @@ class _HomeScreenState extends State<HomeScreen> {
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(16),
             ),
-            onSelected: (value) {
+            onSelected: (value) async {
               if (value == 'group') {
                 Navigator.push(
                   context,
@@ -295,7 +295,7 @@ class _HomeScreenState extends State<HomeScreen> {
               } else if (value == 'logout') {
                 ChatSyncCoordinator.instance.stop();
                 ChatSocketService.instance.disconnect();
-                AuthSession.clear();
+                await AuthSession.clear();
                 locator<SessionCubit>().sync(isLoggedIn: false);
                 NavigationService.removeALlAndReplace(AuthRoutes.login);
               }

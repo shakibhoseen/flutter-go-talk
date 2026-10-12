@@ -7,6 +7,7 @@ class PendingOutboxMessage extends BaseModel {
   final String content;
   final String messageType;
   final DateTime createdAt;
+  final String senderId;
 
   const PendingOutboxMessage({
     required this.clientMessageId,
@@ -14,6 +15,7 @@ class PendingOutboxMessage extends BaseModel {
     required this.content,
     this.messageType = 'text',
     required this.createdAt,
+    this.senderId = '',
   });
 
   @override
@@ -24,6 +26,7 @@ class PendingOutboxMessage extends BaseModel {
       'content': content,
       'message_type': messageType,
       'created_at': createdAt.toIso8601String(),
+      if (senderId.isNotEmpty) 'sender_id': senderId,
     };
   }
 
@@ -35,6 +38,7 @@ class PendingOutboxMessage extends BaseModel {
       messageType: json['message_type'] as String? ?? 'text',
       createdAt: DateTime.tryParse(json['created_at'] as String? ?? '') ??
           DateTime.now(),
+      senderId: json['sender_id'] as String? ?? '',
     );
   }
 }

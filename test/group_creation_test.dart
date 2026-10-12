@@ -85,6 +85,17 @@ class MockChatRepositoryForGroup implements ChatRepository {
   Future<List<Conversation>> getConversations() async => conversationsToReturn;
 
   @override
+  Stream<List<Conversation>> watchConversations({
+    Duration? maxStale,
+    bool? invalidCache,
+    Duration maxAge = const Duration(minutes: 5),
+  }) =>
+      Stream.fromFuture(getConversations());
+
+  @override
+  Future<void> persistConversations(List<Conversation> conversations) async {}
+
+  @override
   Future<String> getOrCreateDirectConversation(int targetUserId) async => 'direct-id';
 
   @override

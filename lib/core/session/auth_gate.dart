@@ -1,8 +1,12 @@
 import 'dart:async';
 
+import '../db/network/socket/chat_socket_service.dart';
+import '../di/di.dart';
 import '../navigation/navigation_service.dart';
 import '../navigation/routes/auth_routes.dart';
+import '../../feature/chat_inbox/data/outbox/chat_sync_coordinator.dart';
 import 'auth_session.dart';
+import 'session_cubit.dart';
 
 /// One place for "this needs a signed-in user".
 ///
@@ -30,9 +34,22 @@ final class AuthGate {
   /// The session died mid-use: the access token was rejected and the refresh
   /// token could not replace it. Nothing is retried after this — the user has
   /// to sign in again before the call that failed can mean anything.
-  static void handleSessionExpired() {
-    AuthSession.clear();
-    unawaited(_openLogin());
+  static Future<void> handleSessionExpired([int? targetEpoch]) async {
+    if (targetEpoch != null) {
+      final didClear = await AuthSession.clearIfEpochMatches(targetEpoch);
+      if (!didClear) return;
+    } else {
+      if (AuthSession.isSignedIn) {
+        await AuthSession.clear();
+      }
+    }
+
+    ChatSyncCoordinator.instance.stop();
+    ChatSocketService.instance.disconnect();
+    if (locator.isRegistered<SessionCubit>()) {
+      locator<SessionCubit>().sync(isLoggedIn: false);
+    }
+    await _openLogin();
   }
 
   static bool _loginIsOpen = false;
@@ -43,7 +60,9 @@ final class AuthGate {
     if (_loginIsOpen) return;
     _loginIsOpen = true;
     try {
-      await NavigationService.navigateTo(AuthRoutes.login);
+      if (NavigationService.navigatorKey.currentState != null) {
+        await NavigationService.navigateTo(AuthRoutes.login);
+      }
     } finally {
       _loginIsOpen = false;
     }

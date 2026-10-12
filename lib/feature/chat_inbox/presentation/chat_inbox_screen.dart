@@ -8,13 +8,13 @@ import 'package:whatsapp_flutter_go/core/navigation/navigation_service.dart';
 import 'package:whatsapp_flutter_go/feature/chat_inbox/data/inbox_message_list_cursor_bloc.dart';
 import 'package:whatsapp_flutter_go/feature/group/presentation/group_info_screen.dart';
 import 'package:whatsapp_flutter_go/feature/chat_inbox/presentation/widgets/message_design.dart';
+import 'package:whatsapp_flutter_go/feature/chat_inbox/data/chat_seen_ack_manager.dart';
 import 'package:whatsapp_flutter_go/feature/chat_inbox/data/outbox/chat_sync_coordinator.dart';
 import 'package:whatsapp_flutter_go/feature/home/model/chat_message.dart';
 
 import '../../../core/controllers/my_scroll_controller.dart';
 import '../../../core/db/network/socket/chat_socket_event_dispatcher.dart';
 import '../../../core/db/network/socket/chat_socket_event_type.dart';
-import '../../../core/db/network/socket/chat_socket_service.dart';
 import '../../../core/session/auth_session.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/widgets/cute_avatar.dart';
@@ -40,7 +40,6 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
   String? get _myId => AuthSession.tokens?.user?.id?.toString();
   MyCursorScrollController? cursorScrollController;
   StreamSubscription<dynamic>? _blocSubscription;
-  String? _lastAckedMessageId;
 
   VoidCallback? _removeNewMessageListener;
   VoidCallback? _removeStatusUpdatedListener;
@@ -73,16 +72,15 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
 
     if (latestIncoming != null) {
       final incomingId = int.tryParse(latestIncoming.id) ?? 0;
-      final lastAckedId = _lastAckedMessageId != null
-          ? (int.tryParse(_lastAckedMessageId!) ?? 0)
-          : 0;
+      final senderId = int.tryParse(latestIncoming.senderId) ?? 0;
 
-      if (incomingId > 0 && incomingId > lastAckedId) {
-        _lastAckedMessageId = latestIncoming.id;
-        ChatSocketService.instance.sendSeenAck(
-          conversationId: conversationArgs!.id,
-          messageId: latestIncoming.id,
-          senderId: int.tryParse(latestIncoming.senderId) ?? 0,
+      if (incomingId > 0) {
+        unawaited(
+          ChatSeenAckManager.instance.onMessageSeen(
+            conversationId: conversationArgs!.id,
+            messageId: incomingId,
+            senderId: senderId,
+          ),
         );
       }
     }
@@ -214,46 +212,10 @@ class _ChatInboxScreenState extends State<ChatInboxScreen> {
 
     final status = json['status'] as String?;
 
-    if (statusMessageId == null) return;
-
-    final targetId = int.tryParse(statusMessageId) ?? 0;
-
-    final isSeenEvent = status == 'seen';
-    final isDeliveredEvent = status == 'delivered';
-
-    if (!isSeenEvent && !isDeliveredEvent) return;
-
-    final items = inboxBloc?.cursorPageHolder.items ?? [];
-    if (items.isEmpty) return;
-
-    var changed = false;
-
-    final updated = items.map((item) {
-      if (!item.isMine) return item;
-
-      final currentId = int.tryParse(item.id) ?? 0;
-
-      if (currentId <= 0 || currentId > targetId) return item;
-
-      if (isSeenEvent && !item.isSeen) {
-        changed = true;
-        return item.copyWith(
-          isSeen: true,
-          isDelivered: true,
-        );
-      } else if (isDeliveredEvent && !item.isDelivered && !item.isSeen) {
-        changed = true;
-        return item.copyWith(
-          isDelivered: true,
-        );
-      }
-
-      return item;
-    }).toList();
-
-    if (changed) {
-      inboxBloc?.replaceLocalItems(updated, emitState: true);
-    }
+    inboxBloc?.handleStatusUpdated(
+      statusMessageId: statusMessageId,
+      status: status,
+    );
   }
 
   void _handleMemberReadWatermark(

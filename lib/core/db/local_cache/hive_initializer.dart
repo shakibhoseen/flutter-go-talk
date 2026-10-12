@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 
 /// Opens Hive once for the whole app.
@@ -26,19 +27,23 @@ class HiveInitializer {
     _pendingAdapters.add(adapter);
   }
 
-  static Future<void> ensureInitialized() {
+  static Future<void> ensureInitialized([String? customPath]) {
     final completer = _initCompleter;
     if (completer != null) return completer.future;
 
     final created = Completer<void>();
     _initCompleter = created;
-    unawaited(_doInit(created));
+    unawaited(_doInit(created, customPath));
     return created.future;
   }
 
-  static Future<void> _doInit(Completer<void> completer) async {
+  static Future<void> _doInit(Completer<void> completer, [String? customPath]) async {
     try {
-      await Hive.initFlutter();
+      if (customPath != null) {
+        Hive.init(customPath);
+      } else {
+        await Hive.initFlutter();
+      }
       _pendingAdapters.forEach(_register);
       _pendingAdapters.clear();
       completer.complete();
@@ -54,4 +59,11 @@ class HiveInitializer {
     if (Hive.isAdapterRegistered(adapter.typeId)) return;
     Hive.registerAdapter(adapter);
   }
+
+  @visibleForTesting
+  static void resetForTesting() {
+    _initCompleter = null;
+    _pendingAdapters.clear();
+  }
 }
+

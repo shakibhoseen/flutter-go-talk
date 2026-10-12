@@ -65,6 +65,7 @@ class Conversation extends BaseModel {
       'type': type,
       'title': title,
       'avatar_url': avatarUrl,
+      'last_message_id': lastMessageId,
       'last_message_content': lastMessageContent,
       'last_message_sender_id': lastMessageSenderId,
       'last_message_at': lastMessageAt?.toIso8601String(),

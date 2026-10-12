@@ -22,4 +22,16 @@ abstract class ChatRepository {
     String? beforeId,
     int? sinceId,
   });
+
+  /// Watches conversations through persistent local cache (stale-while-revalidate).
+  /// Emits cached conversations immediately if available, then refreshes from the network.
+  Stream<List<Conversation>> watchConversations({
+    Duration? maxStale,
+    bool? invalidCache,
+    Duration maxAge = const Duration(minutes: 5),
+  }) =>
+      Stream.fromFuture(getConversations());
+
+  /// Persists the updated conversation list to the local cache.
+  Future<void> persistConversations(List<Conversation> conversations) async {}
 }

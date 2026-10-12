@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:developer';
 
+import 'auth_gate.dart';
 import 'auth_session.dart';
 import 'auth_session_store.dart';
 import 'auth_token_refresher.dart';
@@ -33,10 +34,11 @@ final class AuthBootstrap {
       return;
     }
 
+    final initialEpoch = AuthSession.sessionEpoch;
     unawaited(
       AuthTokenRefresher.instance.refresh().then((result) async {
         if (result == TokenRefreshResult.invalidToken) {
-          await AuthSession.clear();
+          await AuthGate.handleSessionExpired(initialEpoch);
         }
       }).catchError((Object error, StackTrace stackTrace) {
         log(

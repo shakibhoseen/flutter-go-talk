@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import '../../../../core/db/network/socket/chat_socket_event_dispatcher.dart';
 import '../../../../core/db/network/socket/chat_socket_service.dart';
 import '../../../../core/session/auth_session.dart';
+import '../chat_seen_ack_manager.dart';
 import '../inbox_message_list_cursor_bloc.dart';
 import 'chat_outbox_processor.dart';
 import 'local_outbox_storage.dart';
@@ -23,6 +24,7 @@ class ChatSyncCoordinator {
   final ChatSocketService socketService;
   final ChatSocketEventDispatcher eventDispatcher;
   final LocalOutboxStorage outboxStorage;
+  final ChatSeenAckManager seenAckManager;
   final String? Function()? currentUserIdProvider;
   final bool Function()? isConnectedOverride;
 
@@ -31,13 +33,15 @@ class ChatSyncCoordinator {
     ChatSocketService? socketService,
     ChatSocketEventDispatcher? eventDispatcher,
     LocalOutboxStorage? outboxStorage,
+    ChatSeenAckManager? seenAckManager,
     this.currentUserIdProvider,
     this.isConnectedOverride,
   })  : outboxProcessor = outboxProcessor ?? ChatOutboxProcessor.instance,
         socketService = socketService ?? ChatSocketService.instance,
         eventDispatcher = eventDispatcher ?? ChatSocketEventDispatcher.instance,
         outboxStorage = outboxStorage ??
-            (outboxProcessor?.outboxStorage ?? ChatOutboxProcessor.instance.outboxStorage);
+            (outboxProcessor?.outboxStorage ?? ChatOutboxProcessor.instance.outboxStorage),
+        seenAckManager = seenAckManager ?? ChatSeenAckManager.instance;
 
   static final ChatSyncCoordinator instance = ChatSyncCoordinator();
 
@@ -189,6 +193,7 @@ class ChatSyncCoordinator {
     _lastConnectionState = currentState;
 
     if (wasNotConnected && currentState == SocketConnectionState.connected) {
+      ChatSeenAckManager.instance.onSocketReconnected();
       handleReconnect(
         inboxBloc: _activeInboxBloc,
         onSyncSuccess: _onSyncSuccess,
@@ -246,12 +251,18 @@ class ChatSyncCoordinator {
             'Delta sync failed or incomplete, skipping outbox retry for now',
             name: 'ChatSyncCoordinator',
           );
+          // Delta sync failure for this inbox does not invalidate monotonic read watermarks.
+          // Retry pending seen ACKs across all conversations.
+          await seenAckManager.retryPendingAcks();
           return false;
         }
 
         // 2. Delta sync succeeded: trigger Seen ACK callback
         callback?.call();
       }
+
+      // Retry any pending seen ACKs across all conversations
+      await seenAckManager.retryPendingAcks();
 
       // 3. Process remaining unresolved outbox messages
       await outboxProcessor.processPending();

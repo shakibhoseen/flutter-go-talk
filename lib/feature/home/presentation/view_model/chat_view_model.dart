@@ -27,8 +27,8 @@ class ChatViewModel {
     ChatSyncCoordinator? syncCoordinator,
   })  : repository = repository ?? const HttpChatRepository(),
         syncCoordinator = syncCoordinator ?? ChatSyncCoordinator.instance {
-    conversationsBloc.setFunction(
-      attach: (_) => this.repository.getConversations(),
+    conversationsBloc.setStreamFunction(
+      attach: (_) => _watchConversationsMerged(),
     );
     allUsersBloc.setFunction(attach: (_) => this.repository.getAllUsers());
     conversationsBloc.execute();
@@ -57,6 +57,8 @@ class ChatViewModel {
   StreamSubscription<dynamic>? _socketSubscription;
   bool _isRefreshingConversations = false;
   bool get isRefreshingConversations => _isRefreshingConversations;
+  bool _isDisposed = false;
+  bool get isDisposed => _isDisposed;
 
   @visibleForTesting
   void handleSocketEventForTesting(Map<String, dynamic> event) {
@@ -64,6 +66,7 @@ class ChatViewModel {
   }
 
   void _handleSocketEvent(Map<String, dynamic> event) {
+    if (_isDisposed) return;
     switch (event['type']) {
       case 'new_message':
         _handleNewMessage(event['payload']);
@@ -81,6 +84,7 @@ class ChatViewModel {
   }
 
   void _handleUserPresence(dynamic payload) {
+    if (_isDisposed) return;
     if (payload is! Map) return;
     final json = Map<String, dynamic>.from(payload);
     final rawUserId = json['user_id'];
@@ -121,6 +125,7 @@ class ChatViewModel {
   }
 
   void _handleIncomingCall(dynamic payload) {
+    if (_isDisposed) return;
     if (payload is! Map) return;
     final json = Map<String, dynamic>.from(payload);
     final fromUserId = json['from_user_id'] as int? ?? 0;
@@ -207,6 +212,7 @@ class ChatViewModel {
   /// and refreshes its preview; if it's a conversation this session hasn't
   /// fetched yet, inserts it directly rather than waiting on a refetch.
   void _handleNewMessage(dynamic payload) {
+    if (_isDisposed) return;
     if (payload is! Map) return;
     final message = Map<String, dynamic>.from(payload);
 
@@ -278,6 +284,7 @@ class ChatViewModel {
     }
 
     conversationsBloc.emitSuccess(conversations);
+    unawaited(repository.persistConversations(conversations));
   }
 
   @visibleForTesting
@@ -287,6 +294,7 @@ class ChatViewModel {
   /// Ensures newly created direct or group conversations immediately appear
   /// in the conversations list without waiting for a message or network refresh.
   void addOrUpdateConversation(Conversation conversation) {
+    if (_isDisposed) return;
     final state = conversationsBloc.state;
     final current = state is SuccessState<List<Conversation>>
         ? List<Conversation>.from(state.data)
@@ -306,21 +314,25 @@ class ChatViewModel {
     });
 
     conversationsBloc.emitSuccess(current);
+    unawaited(repository.persistConversations(current));
   }
 
   /// Removes a conversation from the active list.
   /// Used when a user leaves or deletes a group conversation.
   void removeConversation(String conversationId) {
+    if (_isDisposed) return;
     final state = conversationsBloc.state;
     if (state is SuccessState<List<Conversation>>) {
       final updated = state.data.where((c) => c.id != conversationId).toList();
       conversationsBloc.emitSuccess(updated);
+      unawaited(repository.persistConversations(updated));
     }
   }
 
   /// Background refresh of conversations from `GET /conversations`.
   /// Uses [emitSuccess] to avoid replacing the active list with a loading spinner.
   Future<void> refreshConversations() async {
+    if (_isDisposed) return;
     // Avoid duplicate requests if initial load is still in flight or a refresh is active
     final isInitialPending =
         conversationsBloc.isLoading || conversationsBloc.state is InitialState;
@@ -347,14 +359,41 @@ class ChatViewModel {
     }
   }
 
+  Stream<List<Conversation>> _watchConversationsMerged() {
+    var isFirst = true;
+    return repository.watchConversations().map((list) {
+      if (isFirst) {
+        isFirst = false;
+        return list;
+      }
+      final state = conversationsBloc.state;
+      final current = state is SuccessState<List<Conversation>>
+          ? state.data
+          : <Conversation>[];
+      final merged = _mergeConversationsList(current, list);
+      unawaited(repository.persistConversations(merged));
+      return merged;
+    });
+  }
+
   void _mergeAndEmitConversations(List<Conversation> fresh) {
+    if (_isDisposed) return;
     final state = conversationsBloc.state;
     if (state is! SuccessState<List<Conversation>>) {
       conversationsBloc.emitSuccess(fresh);
+      unawaited(repository.persistConversations(fresh));
       return;
     }
 
-    final current = state.data;
+    final merged = _mergeConversationsList(state.data, fresh);
+    conversationsBloc.emitSuccess(merged);
+    unawaited(repository.persistConversations(merged));
+  }
+
+  List<Conversation> _mergeConversationsList(
+    List<Conversation> current,
+    List<Conversation> fresh,
+  ) {
     final currentMap = {for (final c in current) c.id: c};
 
     // Monotonic merge: ensure an in-memory head (e.g. from a live WebSocket
@@ -379,11 +418,18 @@ class ChatViewModel {
       return inc;
     }).toList();
 
-    // Preserve any existing conversation that was not returned in the fresh list
+    // Preserve missing conversations ONLY if they are unconfirmed local-only creations
+    // (e.g., recently created group with no server messages yet).
+    // All confirmed server conversations missing from fresh are removed.
     final incomingIds = {for (final inc in fresh) inc.id};
+    final now = DateTime.now();
     for (final curr in current) {
       if (!incomingIds.contains(curr.id)) {
-        merged.add(curr);
+        final isOptimisticLocalOnly = curr.lastMessageId == null &&
+            now.difference(curr.createdAt).abs() < const Duration(minutes: 5);
+        if (isOptimisticLocalOnly) {
+          merged.add(curr);
+        }
       }
     }
 
@@ -394,7 +440,7 @@ class ChatViewModel {
       return timeB.compareTo(timeA);
     });
 
-    conversationsBloc.emitSuccess(merged);
+    return merged;
   }
 
   bool _isExistingNewer(Conversation existing, Conversation incoming) {
@@ -422,7 +468,13 @@ class ChatViewModel {
   }
 
   void dispose() {
+    _isDisposed = true;
     syncCoordinator.unregisterConversationsSync();
+    syncCoordinator.unregisterConversationRemoved();
     _socketSubscription?.cancel();
+    conversationsBloc.requestCancelScope.close();
+    allUsersBloc.requestCancelScope.close();
+    conversationsBloc.close();
+    allUsersBloc.close();
   }
 }

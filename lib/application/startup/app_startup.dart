@@ -2,6 +2,7 @@ import 'dart:developer';
 
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
+import '../../core/db/local_cache/hive_initializer.dart';
 import '../../core/db/network/dio/auth_dio.dart';
 import '../../core/db/network/dio/dio.dart';
 import '../../core/db/network/socket/chat_socket_service.dart';
@@ -26,7 +27,11 @@ class AppStartup {
       log('could not load .env: $error', name: 'AppStartup');
     }
 
-    await Future.wait([AppVersionService.init(), diSetup()]);
+    await Future.wait([
+      AppVersionService.init(),
+      diSetup(),
+      HiveInitializer.ensureInitialized(),
+    ]);
 
     AuthDioSingleton.instance.create();
     // The general/chat client — created here too so a guest's first request

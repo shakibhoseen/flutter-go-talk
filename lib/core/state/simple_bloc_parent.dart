@@ -6,20 +6,37 @@ import 'common_base_bloc.dart';
 class SimpleBlocParent<T> extends CommonBloc<CommonEvent, CommonState, T> {
   SimpleBlocParent() : super(const InitialState());
   Future<T> Function(CommonEvent event)? _onExecute;
+  Stream<T> Function(CommonEvent event)? _onExecuteStream;
 
   void setFunction({required Future<T> Function(CommonEvent event) attach}) {
     _onExecute = attach;
+    _onExecuteStream = null;
   }
+
+  void setStreamFunction({
+    required Stream<T> Function(CommonEvent event) attach,
+  }) {
+    _onExecuteStream = attach;
+    _onExecute = null;
+  }
+
+  @override
+  Stream<T> Function(CommonEvent event)? get eventStreamBuilder =>
+      _onExecuteStream;
 
   @override
   Future<T> handleEvent(CommonEvent event) {
     final onExecute = _onExecute;
-    if (onExecute == null) {
-      throw StateError(
-        'SimpleBlocParent.handleEvent called before setFunction was invoked',
-      );
+    if (onExecute != null) {
+      return onExecute(event);
     }
-    return onExecute(event);
+    final onExecuteStream = _onExecuteStream;
+    if (onExecuteStream != null) {
+      return onExecuteStream(event).last;
+    }
+    throw StateError(
+      'SimpleBlocParent.handleEvent called before setFunction or setStreamFunction was invoked',
+    );
   }
 
   @override

@@ -6,9 +6,12 @@ import 'pending_outbox_message.dart';
 abstract class LocalOutboxStorage {
   Future<void> save(PendingOutboxMessage message);
   Future<void> remove(String clientMessageId);
-  Future<List<PendingOutboxMessage>> getMessagesForConversation(String conversationId);
-  Future<List<PendingOutboxMessage>> getAllMessages();
-  Future<void> clear();
+  Future<List<PendingOutboxMessage>> getMessagesForConversation(
+    String conversationId, {
+    String? targetUserScope,
+  });
+  Future<List<PendingOutboxMessage>> getAllMessages({String? targetUserScope});
+  Future<void> clear({String? targetUserScope});
 }
 
 /// SharedPreferences-backed implementation of [LocalOutboxStorage].
@@ -23,31 +26,41 @@ class SharedPreferencesOutboxStorage implements LocalOutboxStorage {
     return _customPrefs ?? await SharedPreferences.getInstance();
   }
 
+  static bool _matchesUserScope(PendingOutboxMessage m, String? targetUserScope) {
+    if (targetUserScope == null) return true;
+    if (targetUserScope.isEmpty || targetUserScope == 'guest') {
+      return m.senderId.isEmpty || m.senderId == 'guest';
+    }
+    return m.senderId == targetUserScope;
+  }
+
   @override
   Future<void> save(PendingOutboxMessage message) async {
-    final prefs = await _getPrefs();
-    final raw = prefs.getString(storageKey);
-    final map = <String, dynamic>{};
-    if (raw != null && raw.isNotEmpty) {
-      try {
-        final decoded = jsonDecode(raw);
-        if (decoded is Map<String, dynamic>) {
-          map.addAll(decoded);
-        }
-      } catch (_) {}
-    }
+    try {
+      final prefs = await _getPrefs();
+      final raw = prefs.getString(storageKey);
+      final map = <String, dynamic>{};
+      if (raw != null && raw.isNotEmpty) {
+        try {
+          final decoded = jsonDecode(raw);
+          if (decoded is Map<String, dynamic>) {
+            map.addAll(decoded);
+          }
+        } catch (_) {}
+      }
 
-    map[message.clientMessageId] = message.toJson();
-    await prefs.setString(storageKey, jsonEncode(map));
+      map[message.clientMessageId] = message.toJson();
+      await prefs.setString(storageKey, jsonEncode(map));
+    } catch (_) {}
   }
 
   @override
   Future<void> remove(String clientMessageId) async {
-    final prefs = await _getPrefs();
-    final raw = prefs.getString(storageKey);
-    if (raw == null || raw.isEmpty) return;
-
     try {
+      final prefs = await _getPrefs();
+      final raw = prefs.getString(storageKey);
+      if (raw == null || raw.isEmpty) return;
+
       final decoded = jsonDecode(raw);
       if (decoded is Map<String, dynamic>) {
         decoded.remove(clientMessageId);
@@ -58,27 +71,34 @@ class SharedPreferencesOutboxStorage implements LocalOutboxStorage {
 
   @override
   Future<List<PendingOutboxMessage>> getMessagesForConversation(
-    String conversationId,
-  ) async {
-    final all = await getAllMessages();
+    String conversationId, {
+    String? targetUserScope,
+  }) async {
+    final all = await getAllMessages(targetUserScope: targetUserScope);
     return all.where((m) => m.conversationId == conversationId).toList();
   }
 
   @override
-  Future<List<PendingOutboxMessage>> getAllMessages() async {
-    final prefs = await _getPrefs();
-    final raw = prefs.getString(storageKey);
-    if (raw == null || raw.isEmpty) return [];
-
+  Future<List<PendingOutboxMessage>> getAllMessages({
+    String? targetUserScope,
+  }) async {
     try {
+      final prefs = await _getPrefs();
+      final raw = prefs.getString(storageKey);
+      if (raw == null || raw.isEmpty) return [];
+
       final decoded = jsonDecode(raw);
       if (decoded is Map<String, dynamic>) {
         final list = <PendingOutboxMessage>[];
         for (final entry in decoded.values) {
+          PendingOutboxMessage? msg;
           if (entry is Map<String, dynamic>) {
-            list.add(PendingOutboxMessage.fromJson(entry));
+            msg = PendingOutboxMessage.fromJson(entry);
           } else if (entry is Map) {
-            list.add(PendingOutboxMessage.fromJson(Map<String, dynamic>.from(entry)));
+            msg = PendingOutboxMessage.fromJson(Map<String, dynamic>.from(entry));
+          }
+          if (msg != null && _matchesUserScope(msg, targetUserScope)) {
+            list.add(msg);
           }
         }
         list.sort((a, b) => a.createdAt.compareTo(b.createdAt));
@@ -89,15 +109,41 @@ class SharedPreferencesOutboxStorage implements LocalOutboxStorage {
   }
 
   @override
-  Future<void> clear() async {
-    final prefs = await _getPrefs();
-    await prefs.remove(storageKey);
+  Future<void> clear({String? targetUserScope}) async {
+    try {
+      final prefs = await _getPrefs();
+      if (targetUserScope == null) {
+        await prefs.remove(storageKey);
+      } else {
+        final raw = prefs.getString(storageKey);
+        if (raw == null || raw.isEmpty) return;
+        final decoded = jsonDecode(raw);
+        if (decoded is Map<String, dynamic>) {
+          decoded.removeWhere((key, value) {
+            if (value is Map<String, dynamic>) {
+              final msg = PendingOutboxMessage.fromJson(value);
+              return _matchesUserScope(msg, targetUserScope);
+            }
+            return false;
+          });
+          await prefs.setString(storageKey, jsonEncode(decoded));
+        }
+      }
+    } catch (_) {}
   }
 }
 
 /// In-memory implementation of [LocalOutboxStorage] useful for fast testing or ephemeral sessions.
 class InMemoryOutboxStorage implements LocalOutboxStorage {
   final Map<String, PendingOutboxMessage> _items = {};
+
+  static bool _matchesUserScope(PendingOutboxMessage m, String? targetUserScope) {
+    if (targetUserScope == null) return true;
+    if (targetUserScope.isEmpty || targetUserScope == 'guest') {
+      return m.senderId.isEmpty || m.senderId == 'guest';
+    }
+    return m.senderId == targetUserScope;
+  }
 
   @override
   Future<void> save(PendingOutboxMessage message) async {
@@ -110,22 +156,37 @@ class InMemoryOutboxStorage implements LocalOutboxStorage {
   }
 
   @override
-  Future<List<PendingOutboxMessage>> getMessagesForConversation(String conversationId) async {
-    final list = _items.values.where((m) => m.conversationId == conversationId).toList();
+  Future<List<PendingOutboxMessage>> getMessagesForConversation(
+    String conversationId, {
+    String? targetUserScope,
+  }) async {
+    final list = _items.values
+        .where((m) =>
+            m.conversationId == conversationId &&
+            _matchesUserScope(m, targetUserScope))
+        .toList();
     list.sort((a, b) => a.createdAt.compareTo(b.createdAt));
     return list;
   }
 
   @override
-  Future<List<PendingOutboxMessage>> getAllMessages() async {
-    final list = _items.values.toList();
+  Future<List<PendingOutboxMessage>> getAllMessages({
+    String? targetUserScope,
+  }) async {
+    final list = _items.values
+        .where((m) => _matchesUserScope(m, targetUserScope))
+        .toList();
     list.sort((a, b) => a.createdAt.compareTo(b.createdAt));
     return list;
   }
 
   @override
-  Future<void> clear() async {
-    _items.clear();
+  Future<void> clear({String? targetUserScope}) async {
+    if (targetUserScope == null) {
+      _items.clear();
+    } else {
+      _items.removeWhere((k, m) => _matchesUserScope(m, targetUserScope));
+    }
   }
 }
 

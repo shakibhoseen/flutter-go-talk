@@ -145,6 +145,10 @@ class ChatMessage extends BaseModel {
       'is_seen': isSeen,
       'is_delivered': isDelivered,
       if (timeStamp != null) 'time_stamp': timeStamp!.toJson(),
+      if (senderName.isNotEmpty) 'sender_name': senderName,
+      if (senderAvatar.isNotEmpty) 'sender_avatar': senderAvatar,
+      if (readBy.isNotEmpty) 'read_by': readBy.map((r) => r.toJson()).toList(),
+      if (readCount > 0) 'read_count': readCount,
     };
   }
 }

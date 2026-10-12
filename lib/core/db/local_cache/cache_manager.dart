@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
 import 'dart:developer';
@@ -8,6 +9,7 @@ import 'package:hive_flutter/hive_flutter.dart';
 
 import '../network/network_base_url_resolver.dart';
 import '../network/network_service_type.dart';
+import '../../session/auth_session.dart';
 import 'hive_initializer.dart';
 
 class CacheManager {
@@ -27,14 +29,58 @@ class CacheManager {
   static String Function() cacheScopeResolver =
       () => NetworkBaseUrlResolver.resolve(NetworkServiceType.chat);
 
+  /// Scopes cache keys to the authenticated user ID so User A never sees
+  /// User B's cached responses upon account switching.
+  @visibleForTesting
+  static String Function() userScopeResolver =
+      () => AuthSession.tokens?.user?.id?.toString() ?? 'guest';
+
+  int _sessionEpoch = 0;
+
+  /// Monotonically increasing epoch counter incremented on cache clear / logout.
+  int get sessionEpoch => _sessionEpoch;
+
+  /// Resolves the current user scope.
+  String resolveCurrentUserScope() => _resolveUserScope();
+
+  @visibleForTesting
+  void incrementSessionEpochForTesting() => _sessionEpoch++;
+
   // Memory cache with LRU eviction
   final _memoryCache = <String, CacheEntry>{};
   static const _maxMemoryItems = 100; // Prevent memory overuse
+  final _latestCommittedRevisions = <String, int>{};
 
   // Hive box for persistent storage
   Box<String>? _cacheBox;
   Box<Map>? _metadataBox;
   Future<void>? _initFuture;
+  Future<void>? _activeClearFuture;
+
+  /// Returns a Future that completes when any in-flight cache clear has finished.
+  Future<void> get pendingClearFuture => _activeClearFuture ?? Future.value();
+
+  @visibleForTesting
+  static Completer<void>? clearHoldCompleter;
+
+  @visibleForTesting
+  void resetForTesting() {
+    _sessionEpoch++;
+    _memoryCache.clear();
+    _latestCommittedRevisions.clear();
+    _cacheBox = null;
+    _metadataBox = null;
+    _initFuture = null;
+    _activeClearFuture = null;
+    clearHoldCompleter = null;
+  }
+
+  Future<void> _coordinatePendingClear() async {
+    final active = _activeClearFuture;
+    if (active != null) {
+      await active;
+    }
+  }
 
   Future<void> _ensureInitialized() {
     if (_cacheBox != null && _metadataBox != null) return Future.value();
@@ -44,8 +90,12 @@ class CacheManager {
   Future<void> _doInit() async {
     try {
       await HiveInitializer.ensureInitialized();
-      _cacheBox = await Hive.openBox<String>('api_cache');
-      _metadataBox = await Hive.openBox<Map>('cache_metadata');
+      _cacheBox = Hive.isBoxOpen('api_cache')
+          ? Hive.box<String>('api_cache')
+          : await Hive.openBox<String>('api_cache');
+      _metadataBox = Hive.isBoxOpen('cache_metadata')
+          ? Hive.box<Map>('cache_metadata')
+          : await Hive.openBox<Map>('cache_metadata');
     } catch (_) {
       _initFuture = null; // allow retry on failure
       rethrow;
@@ -64,19 +114,41 @@ class CacheManager {
     required Map<String, dynamic> data,
     Map<String, dynamic>? params,
     Duration? maxAge,
+    String? targetUserScope,
+    int? sessionEpoch,
+    int? writeRevision,
   }) async {
+    await _coordinatePendingClear();
     await _ensureInitialized();
-    final combinedKey = _generateKey(endpoint, params); // cacheKey, originalKey
+    final effectiveUserScope = targetUserScope ?? _resolveUserScope();
+
+    // Abort if session cleared/changed or active user scope drifted
+    if (sessionEpoch != null && sessionEpoch != _sessionEpoch) {
+      log('Aborting cacheResponse: session epoch mismatch ($sessionEpoch != $_sessionEpoch)', name: 'CacheManager');
+      return;
+    }
+    if (_resolveUserScope() != effectiveUserScope) {
+      log('Aborting cacheResponse: user scope mismatch ($effectiveUserScope != ${_resolveUserScope()})', name: 'CacheManager');
+      return;
+    }
+
+    final combinedKey = _generateKey(endpoint, params, targetUserScope: effectiveUserScope); // cacheKey, originalKey
+    final cacheKey = combinedKey.$1;
+
+    // Reject stale writes when a newer revision has already been written
+    if (writeRevision != null) {
+      final committed = _latestCommittedRevisions[cacheKey] ?? 0;
+      if (writeRevision < committed) {
+        log('Aborting cacheResponse: writeRevision ($writeRevision) < committed ($committed)', name: 'CacheManager');
+        return;
+      }
+      _latestCommittedRevisions[cacheKey] = writeRevision;
+    }
+
     final expiresAt = maxAge != null
         ? DateTime.now().add(maxAge).millisecondsSinceEpoch
         : null;
 
-    // final entry = {
-    //   //'data': data,
-    //   'timestamp': DateTime.now().millisecondsSinceEpoch,
-    //   'originalKey': combinedKey.$2, // saved originalKey
-    //   if (expiresAt != null) 'expiresAt': expiresAt,
-    // };
     final entry = CacheEntry(
       data: data,
       timestamp: DateTime.now().millisecondsSinceEpoch,
@@ -85,12 +157,13 @@ class CacheManager {
     );
 
     // Update memory cache
-    _updateMemoryCache(combinedKey.$1, entry);
+    _updateMemoryCache(cacheKey, entry);
 
-    final metadata = Map.fromEntries(entry.toJson().entries);
+    final metadata = Map<String, dynamic>.from(entry.toJson());
     metadata.remove('data');
-    await _metadata.put(combinedKey.$1, metadata);
-    await _cache.put(combinedKey.$1, jsonEncode(data));
+    metadata['userScope'] = effectiveUserScope;
+    await _metadata.put(cacheKey, metadata);
+    await _cache.put(cacheKey, jsonEncode(data));
   }
 
   /// Reads a cached response.
@@ -102,9 +175,12 @@ class CacheManager {
     required String endpoint,
     Map<String, dynamic>? params,
     bool allowExpired = false,
+    String? targetUserScope,
   }) async {
+    await _coordinatePendingClear();
     await _ensureInitialized();
-    final combinedKey = _generateKey(endpoint, params);
+    final effectiveUserScope = targetUserScope ?? _resolveUserScope();
+    final combinedKey = _generateKey(endpoint, params, targetUserScope: effectiveUserScope);
     final cacheKey = combinedKey.$1;
 
     if (_memoryCache.containsKey(cacheKey)) {
@@ -171,9 +247,12 @@ class CacheManager {
     required String endpoint,
     Map<String, dynamic>? params,
     Duration? maxStale,
+    String? targetUserScope,
   }) async {
+    await _coordinatePendingClear();
     await _ensureInitialized();
-    final cacheKey = _generateKey(endpoint, params).$1;
+    final effectiveUserScope = targetUserScope ?? _resolveUserScope();
+    final cacheKey = _generateKey(endpoint, params, targetUserScope: effectiveUserScope).$1;
     final raw = _cache.get(cacheKey);
     if (raw == null || maxStale == null) {
       return raw;
@@ -202,9 +281,16 @@ class CacheManager {
     required String endpoint,
     Map<String, dynamic>? params,
     Duration? maxAge,
+    String? targetUserScope,
+    int? sessionEpoch,
   }) async {
+    await _coordinatePendingClear();
     await _ensureInitialized();
-    final cacheKey = _generateKey(endpoint, params).$1;
+    final effectiveUserScope = targetUserScope ?? _resolveUserScope();
+    if (sessionEpoch != null && sessionEpoch != _sessionEpoch) return;
+    if (_resolveUserScope() != effectiveUserScope) return;
+
+    final cacheKey = _generateKey(endpoint, params, targetUserScope: effectiveUserScope).$1;
 
     final dynamic rawMetadata = _metadata.get(cacheKey);
     if (rawMetadata is! Map) {
@@ -237,13 +323,20 @@ class CacheManager {
   // ======================
 
   Future<void> invalidateEndpoint(String endpoint) async {
+    await _coordinatePendingClear();
     await _ensureInitialized();
     final keysToDelete = <String>[];
+    final currentUserScope = _resolveUserScope();
 
     for (final hashKey in _metadata.keys) {
       final dynamic rawMetadata = _metadata.get(hashKey);
-      if(rawMetadata == null) continue;
+      if (rawMetadata == null) continue;
       final metadata = Map<String, dynamic>.from(rawMetadata);
+
+      final userScope = metadata['userScope'] as String?;
+      if (userScope != null && userScope != currentUserScope) {
+        continue;
+      }
 
       final originalKey = metadata['originalKey'] as String?;
       if (originalKey != null && Uri.parse(originalKey).path == endpoint) {
@@ -259,6 +352,7 @@ class CacheManager {
   }
 
   Future<void> invalidateMatching(RegExp pattern) async {
+    await _coordinatePendingClear();
     await _ensureInitialized();
     final keysToDelete = <String>[];
 
@@ -278,26 +372,54 @@ class CacheManager {
     await _metadata.deleteAll(keysToDelete);
   }
 
-  Future<void> clearAllCache() async {
-    await _ensureInitialized();
+  Future<void> clearAllCache() {
+    _sessionEpoch++;
     _memoryCache.clear();
-    await _cache.clear();
-    await _metadata.clear();
+    _latestCommittedRevisions.clear();
+
+    final prevClear = _activeClearFuture ?? Future.value();
+    late final Future<void> currentClear;
+    currentClear = prevClear.then((_) => _doClearAllCache()).whenComplete(() {
+      if (identical(_activeClearFuture, currentClear)) {
+        _activeClearFuture = null;
+      }
+    });
+    _activeClearFuture = currentClear;
+    return currentClear;
+  }
+
+  Future<void> _doClearAllCache() async {
+    try {
+      final hold = clearHoldCompleter;
+      if (hold != null) {
+        await hold.future;
+      }
+      await _ensureInitialized();
+      await _cache.clear();
+      await _metadata.clear();
+    } catch (_) {
+      // Memory cache is cleared; ignore if Hive boxes could not be opened.
+    }
   }
 
   // ======================
   // UTILITY METHODS
   // ======================
 
-  (String, String) _generateKey(String endpoint, Map<String, dynamic>? params) {
+  (String, String) _generateKey(
+    String endpoint,
+    Map<String, dynamic>? params, {
+    String? targetUserScope,
+  }) {
     // cacheKey, originalKey
 
     final url = _generateOriginalKey(endpoint, params);
 
-    // The scope is hashed into the key but deliberately kept out of
+    // The scope and user are hashed into the key but deliberately kept out of
     // `originalKey`, so endpoint-based invalidation keeps matching no matter
-    // which environment an entry belongs to.
-    var bytes = utf8.encode('${_resolveScope()}|$url');
+    // which environment or user an entry belongs to.
+    final userScope = targetUserScope ?? _resolveUserScope();
+    var bytes = utf8.encode('${_resolveScope()}|$userScope|$url');
     var digest = sha256.convert(bytes); // SHA-256 hash
     return (digest.toString(), url); // hex string, length 64
   }
@@ -309,6 +431,14 @@ class CacheManager {
       // Base url not resolvable yet (no dotenv / DI). An unscoped key is
       // better than throwing from a cache lookup.
       return '';
+    }
+  }
+
+  String _resolveUserScope() {
+    try {
+      return userScopeResolver();
+    } catch (_) {
+      return 'guest';
     }
   }
 

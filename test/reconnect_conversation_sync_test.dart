@@ -33,6 +33,19 @@ class MockConversationRepository implements ChatRepository {
   }
 
   @override
+  Stream<List<Conversation>> watchConversations({
+    Duration? maxStale,
+    bool? invalidCache,
+    Duration maxAge = const Duration(minutes: 5),
+  }) =>
+      Stream.fromFuture(getConversations());
+
+  @override
+  Future<void> persistConversations(List<Conversation> conversations) async {
+    conversationsToReturn = conversations;
+  }
+
+  @override
   Future<List<ChatUser>> getAllUsers() async => const [];
 
   @override
